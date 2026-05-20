@@ -2,6 +2,8 @@
   "pollIntervalSeconds": 300,
   "alwaysOnTop": true,
   "startAtTopRight": true,
+  "showCodex": true,
+  "showClaude": true,
   "codexSessionsPath": "%USERPROFILE%\\.codex\\sessions",
   "codexAuthPath": "%USERPROFILE%\\.codex\\auth.json",
   "claudeProjectsPath": "%USERPROFILE%\\.claude\\projects",

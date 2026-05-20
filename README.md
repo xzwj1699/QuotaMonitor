@@ -6,6 +6,8 @@ A small Windows desktop monitor for Codex and Claude Code quota.
 
 - Codex 5h and weekly quota bars.
 - Claude 5h and 7d quota bars.
+- Optional Codex-only or Claude-only view.
+- Subscription type display for each visible service.
 - Realtime API first, local-log fallback.
 - Week/7d usage pace chart: dashed ideal line vs actual recorded usage.
 - Auto refresh every 5 minutes by default.
@@ -25,6 +27,8 @@ Or:
 ```powershell
 .\QuotaMonitor.exe
 ```
+
+Right-click the window to switch Codex/Claude visibility, toggle topmost mode, refresh, minimize, or exit.
 
 ## Data Sources
 
@@ -75,6 +79,8 @@ Important settings:
 - `pollIntervalSeconds`: refresh interval. Default is `300`.
 - `alwaysOnTop`: keep the monitor above other windows.
 - `startAtTopRight`: place the window at the top-right of the primary screen.
+- `showCodex`: show or hide the Codex column.
+- `showClaude`: show or hide the Claude column.
 - `useRealtimeApi`: use Codex/Claude realtime endpoints first.
 - `realtimeApiTimeoutSeconds`: request timeout.
 

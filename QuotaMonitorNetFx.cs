@@ -59,6 +59,8 @@ internal sealed class MonitorConfig
     public int pollIntervalSeconds { get; set; }
     public bool alwaysOnTop { get; set; }
     public bool startAtTopRight { get; set; }
+    public bool showCodex { get; set; }
+    public bool showClaude { get; set; }
     public string codexSessionsPath { get; set; }
     public string codexAuthPath { get; set; }
     public string claudeProjectsPath { get; set; }
@@ -91,6 +93,8 @@ internal sealed class MonitorConfig
             pollIntervalSeconds = 300,
             alwaysOnTop = true,
             startAtTopRight = true,
+            showCodex = true,
+            showClaude = true,
             codexSessionsPath = "%USERPROFILE%\\.codex\\sessions",
             codexAuthPath = "%USERPROFILE%\\.codex\\auth.json",
             claudeProjectsPath = "%USERPROFILE%\\.claude\\projects",
@@ -120,8 +124,23 @@ internal sealed class MonitorConfig
 
         try
         {
-            var config = serializer.Deserialize<MonitorConfig>(File.ReadAllText(ConfigPath));
-            return config ?? Default();
+            var raw = File.ReadAllText(ConfigPath);
+            var config = serializer.Deserialize<MonitorConfig>(raw);
+            if (config == null)
+            {
+                return Default();
+            }
+
+            if (!raw.Contains("\"showCodex\""))
+            {
+                config.showCodex = true;
+            }
+            if (!raw.Contains("\"showClaude\""))
+            {
+                config.showClaude = true;
+            }
+
+            return config;
         }
         catch
         {
@@ -135,21 +154,37 @@ internal sealed class MonitorConfig
         File.WriteAllText(ConfigPath, serializer.Serialize(this));
     }
 
+    [ScriptIgnore]
+    public bool CodexVisible
+    {
+        get { return showCodex; }
+    }
+
+    [ScriptIgnore]
+    public bool ClaudeVisible
+    {
+        get { return showClaude; }
+    }
+
+    [ScriptIgnore]
     public string ExpandedCodexSessionsPath
     {
         get { return ExpandPath(codexSessionsPath); }
     }
 
+    [ScriptIgnore]
     public string ExpandedCodexAuthPath
     {
         get { return ExpandPath(codexAuthPath); }
     }
 
+    [ScriptIgnore]
     public string ExpandedClaudeProjectsPath
     {
         get { return ExpandPath(claudeProjectsPath); }
     }
 
+    [ScriptIgnore]
     public string ExpandedClaudeCredentialsPath
     {
         get { return ExpandPath(claudeCredentialsPath); }
@@ -177,8 +212,8 @@ internal static class QuotaReader
         return new QuotaSnapshot
         {
             UpdatedAt = DateTimeOffset.Now,
-            Codex = config.useRealtimeApi ? ReadCodexRealtimeOrLocal(config) : ReadCodexLocal(config),
-            Claude = config.useRealtimeApi ? ReadClaudeRealtimeOrLocal(config) : ReadClaudeLocal(config)
+            Codex = config.CodexVisible ? (config.useRealtimeApi ? ReadCodexRealtimeOrLocal(config) : ReadCodexLocal(config)) : CodexSnapshot.Hidden(),
+            Claude = config.ClaudeVisible ? (config.useRealtimeApi ? ReadClaudeRealtimeOrLocal(config) : ReadClaudeLocal(config)) : ClaudeSnapshot.Hidden()
         };
     }
 
@@ -370,6 +405,7 @@ internal static class QuotaReader
             var credentials = Json.ParseObject(File.ReadAllText(credentialsPath));
             var oauth = Json.Dict(Json.Value(credentials, "claudeAiOauth"));
             var accessToken = Json.String(oauth, "accessToken");
+            var planType = FirstString(oauth, new[] { "subscriptionType", "subscription_type", "planType", "plan_type", "plan" });
             if (string.IsNullOrWhiteSpace(accessToken))
             {
                 return ClaudeSnapshot.Missing("claude oauth access token missing");
@@ -399,6 +435,7 @@ internal static class QuotaReader
             {
                 Available = true,
                 Source = "claude oauth usage",
+                PlanType = planType ?? FirstString(response, new[] { "subscription_type", "subscriptionType", "plan_type", "planType", "plan" }) ?? "unknown",
                 WindowMinutes = 300,
                 WeekWindowMinutes = 10080,
                 RealtimeFiveHour = fiveHour,
@@ -408,6 +445,26 @@ internal static class QuotaReader
         catch (Exception ex)
         {
             return ClaudeSnapshot.Missing("claude realtime: " + ex.Message);
+        }
+    }
+
+    private static string ReadClaudePlanType(MonitorConfig config)
+    {
+        try
+        {
+            var credentialsPath = config.ExpandedClaudeCredentialsPath;
+            if (!File.Exists(credentialsPath))
+            {
+                return null;
+            }
+
+            var credentials = Json.ParseObject(File.ReadAllText(credentialsPath));
+            var oauth = Json.Dict(Json.Value(credentials, "claudeAiOauth"));
+            return FirstString(oauth, new[] { "subscriptionType", "subscription_type", "planType", "plan_type", "plan", "rateLimitTier" });
+        }
+        catch
+        {
+            return null;
         }
     }
 
@@ -695,6 +752,7 @@ internal static class QuotaReader
         {
             Available = true,
             Source = "local jsonl",
+            PlanType = ReadClaudePlanType(config) ?? "unknown",
             WindowMinutes = windowMinutes,
             WeekWindowMinutes = weekWindowMinutes,
             MessageBudget = config.claudeFiveHourMessageBudget,
@@ -1441,12 +1499,20 @@ internal sealed class MainForm : Form
     private readonly QuotaBarControl _claudeWeek;
     private readonly UsagePaceChartControl _codexPaceChart;
     private readonly UsagePaceChartControl _claudePaceChart;
+    private readonly Label _codexPlanLabel;
+    private readonly Label _claudePlanLabel;
     private readonly Label _status;
     private readonly Button _refreshButton;
     private readonly CheckBox _topMostCheckBox;
+    private TableLayoutPanel _columns;
+    private Control _codexColumn;
+    private Control _claudeColumn;
     private ToolStripMenuItem _topMostMenuItem;
+    private ToolStripMenuItem _showCodexMenuItem;
+    private ToolStripMenuItem _showClaudeMenuItem;
     private volatile bool _refreshInProgress;
     private bool _syncingTopMostControl;
+    private bool _syncingServiceMenu;
 
     public MainForm()
     {
@@ -1477,6 +1543,8 @@ internal sealed class MainForm : Form
         _claudeWeek = new QuotaBarControl();
         _codexPaceChart = new UsagePaceChartControl();
         _claudePaceChart = new UsagePaceChartControl();
+        _codexPlanLabel = new Label();
+        _claudePlanLabel = new Label();
         _status = new Label();
         _refreshButton = new Button();
         _topMostCheckBox = new CheckBox();
@@ -1512,16 +1580,14 @@ internal sealed class MainForm : Form
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
 
-        var columns = new TableLayoutPanel();
-        columns.Dock = DockStyle.Fill;
-        columns.ColumnCount = 2;
-        columns.RowCount = 1;
-        columns.Margin = new Padding(0, 0, 0, 8);
-        columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        columns.Controls.Add(BuildServiceColumn("Codex", _codexFiveHour, _codexWeek, _codexPaceChart), 0, 0);
-        columns.Controls.Add(BuildServiceColumn("Claude", _claudeFiveHour, _claudeWeek, _claudePaceChart), 1, 0);
-        root.Controls.Add(columns, 0, 0);
+        _columns = new TableLayoutPanel();
+        _columns.Dock = DockStyle.Fill;
+        _columns.RowCount = 1;
+        _columns.Margin = new Padding(0, 0, 0, 8);
+        _codexColumn = BuildServiceColumn("Codex", _codexPlanLabel, _codexFiveHour, _codexWeek, _codexPaceChart);
+        _claudeColumn = BuildServiceColumn("Claude", _claudePlanLabel, _claudeFiveHour, _claudeWeek, _claudePaceChart);
+        ApplyServiceVisibility(false);
+        root.Controls.Add(_columns, 0, 0);
 
         var bottom = new TableLayoutPanel();
         bottom.Dock = DockStyle.Fill;
@@ -1568,6 +1634,95 @@ internal sealed class MainForm : Form
         Controls.Add(root);
     }
 
+    private void ApplyServiceVisibility(bool persist)
+    {
+        if (!_config.CodexVisible && !_config.ClaudeVisible)
+        {
+            _config.showCodex = true;
+            _config.showClaude = true;
+        }
+
+        if (_columns != null)
+        {
+            _columns.SuspendLayout();
+            try
+            {
+                _columns.Controls.Clear();
+                _columns.ColumnStyles.Clear();
+                var visibleCount = (_config.CodexVisible ? 1 : 0) + (_config.ClaudeVisible ? 1 : 0);
+                _columns.ColumnCount = Math.Max(1, visibleCount);
+
+                for (var i = 0; i < _columns.ColumnCount; i++)
+                {
+                    _columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F / _columns.ColumnCount));
+                }
+
+                var columnIndex = 0;
+                if (_config.CodexVisible)
+                {
+                    _columns.Controls.Add(_codexColumn, columnIndex++, 0);
+                }
+                if (_config.ClaudeVisible)
+                {
+                    _columns.Controls.Add(_claudeColumn, columnIndex, 0);
+                }
+            }
+            finally
+            {
+                _columns.ResumeLayout(true);
+            }
+        }
+
+        _syncingServiceMenu = true;
+        try
+        {
+            if (_showCodexMenuItem != null)
+            {
+                _showCodexMenuItem.Checked = _config.CodexVisible;
+            }
+            if (_showClaudeMenuItem != null)
+            {
+                _showClaudeMenuItem.Checked = _config.ClaudeVisible;
+            }
+        }
+        finally
+        {
+            _syncingServiceMenu = false;
+        }
+
+        if (persist)
+        {
+            SaveConfig();
+        }
+    }
+
+    private void SetServiceVisible(string service, bool visible)
+    {
+        if (string.Equals(service, "codex", StringComparison.OrdinalIgnoreCase))
+        {
+            _config.showCodex = visible;
+        }
+        else
+        {
+            _config.showClaude = visible;
+        }
+
+        if (!_config.CodexVisible && !_config.ClaudeVisible)
+        {
+            if (string.Equals(service, "codex", StringComparison.OrdinalIgnoreCase))
+            {
+                _config.showCodex = true;
+            }
+            else
+            {
+                _config.showClaude = true;
+            }
+        }
+
+        ApplyServiceVisibility(true);
+        RefreshSnapshot();
+    }
+
     private static void StyleActionButton(Button button)
     {
         button.FlatStyle = FlatStyle.Flat;
@@ -1578,7 +1733,7 @@ internal sealed class MainForm : Form
         button.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
     }
 
-    private static Control BuildServiceColumn(string name, QuotaBarControl first, QuotaBarControl second, UsagePaceChartControl chart)
+    private static Control BuildServiceColumn(string name, Label planLabel, QuotaBarControl first, QuotaBarControl second, UsagePaceChartControl chart)
     {
         var column = new TableLayoutPanel();
         column.Dock = DockStyle.Fill;
@@ -1587,10 +1742,19 @@ internal sealed class MainForm : Form
         column.Padding = new Padding(10, 8, 10, 8);
         column.Margin = new Padding(4);
         column.BackColor = Color.FromArgb(248, 249, 250);
-        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
         column.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
         column.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
         column.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var header = new TableLayoutPanel();
+        header.Dock = DockStyle.Fill;
+        header.ColumnCount = 1;
+        header.RowCount = 2;
+        header.Margin = new Padding(0);
+        header.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        header.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
+        header.BackColor = Color.FromArgb(248, 249, 250);
 
         var nameLabel = new Label();
         nameLabel.Text = name;
@@ -1601,6 +1765,15 @@ internal sealed class MainForm : Form
         nameLabel.AutoSize = false;
         nameLabel.AutoEllipsis = true;
 
+        planLabel.Text = "Plan: --";
+        planLabel.Dock = DockStyle.Fill;
+        planLabel.Font = new Font("Segoe UI", 8.25F, FontStyle.Regular, GraphicsUnit.Point);
+        planLabel.ForeColor = Color.FromArgb(92, 98, 108);
+        planLabel.TextAlign = ContentAlignment.MiddleLeft;
+        planLabel.AutoSize = false;
+        planLabel.AutoEllipsis = true;
+        planLabel.Margin = new Padding(0);
+
         first.Dock = DockStyle.Fill;
         second.Dock = DockStyle.Fill;
         chart.Dock = DockStyle.Fill;
@@ -1608,7 +1781,10 @@ internal sealed class MainForm : Form
         second.Margin = new Padding(0, 2, 0, 0);
         chart.Margin = new Padding(0, 12, 0, 0);
 
-        column.Controls.Add(nameLabel, 0, 0);
+        header.Controls.Add(nameLabel, 0, 0);
+        header.Controls.Add(planLabel, 0, 1);
+
+        column.Controls.Add(header, 0, 0);
         column.Controls.Add(first, 0, 1);
         column.Controls.Add(second, 0, 2);
         column.Controls.Add(chart, 0, 3);
@@ -1620,6 +1796,32 @@ internal sealed class MainForm : Form
         var menu = new ContextMenuStrip();
         menu.Items.Add("Refresh", null, delegate { RefreshSnapshot(); });
         menu.Items.Add("Minimize", null, delegate { WindowState = FormWindowState.Minimized; });
+        menu.Items.Add(new ToolStripSeparator());
+        _showCodexMenuItem = new ToolStripMenuItem("Show Codex");
+        _showCodexMenuItem.Checked = _config.CodexVisible;
+        _showCodexMenuItem.CheckOnClick = true;
+        _showCodexMenuItem.CheckedChanged += delegate
+        {
+            if (!_syncingServiceMenu)
+            {
+                SetServiceVisible("codex", _showCodexMenuItem.Checked);
+            }
+        };
+        menu.Items.Add(_showCodexMenuItem);
+
+        _showClaudeMenuItem = new ToolStripMenuItem("Show Claude");
+        _showClaudeMenuItem.Checked = _config.ClaudeVisible;
+        _showClaudeMenuItem.CheckOnClick = true;
+        _showClaudeMenuItem.CheckedChanged += delegate
+        {
+            if (!_syncingServiceMenu)
+            {
+                SetServiceVisible("claude", _showClaudeMenuItem.Checked);
+            }
+        };
+        menu.Items.Add(_showClaudeMenuItem);
+        menu.Items.Add(new ToolStripSeparator());
+
         _topMostMenuItem = new ToolStripMenuItem("Topmost");
         _topMostMenuItem.Checked = _config.alwaysOnTop;
         _topMostMenuItem.CheckOnClick = true;
@@ -1656,19 +1858,24 @@ internal sealed class MainForm : Form
 
         if (persist)
         {
-            try
-            {
-                _config.Save();
-            }
-            catch (Exception ex)
-            {
-                AppLog.Write("save config error: " + ex);
-            }
+            SaveConfig();
         }
 
         if (enabled)
         {
             Activate();
+        }
+    }
+
+    private void SaveConfig()
+    {
+        try
+        {
+            _config.Save();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("save config error: " + ex);
         }
     }
 
@@ -1764,6 +1971,7 @@ internal sealed class MainForm : Form
 
     private void RenderCodex(CodexSnapshot codex)
     {
+        _codexPlanLabel.Text = "Plan: " + FormatPlan(codex.PlanType);
         if (!codex.Available)
         {
             _codexFiveHour.SetData("5h", "No data: " + (codex.Error ?? ""), null);
@@ -1786,6 +1994,7 @@ internal sealed class MainForm : Form
 
     private void RenderClaude(ClaudeSnapshot claude)
     {
+        _claudePlanLabel.Text = "Plan: " + FormatPlan(claude.PlanType);
         if (!claude.Available)
         {
             _claudeFiveHour.SetData("5h estimate", "No data: " + (claude.Error ?? ""), null);
@@ -1886,6 +2095,22 @@ internal sealed class MainForm : Form
         }
 
         return string.Format(CultureInfo.InvariantCulture, "{0} left {1:0}%", label, window.RemainingPercent.Value);
+    }
+
+    private static string FormatPlan(string planType)
+    {
+        if (string.IsNullOrWhiteSpace(planType))
+        {
+            return "unknown";
+        }
+
+        var normalized = planType.Trim().Replace("_", " ").Replace("-", " ");
+        if (normalized.Length == 0)
+        {
+            return "unknown";
+        }
+
+        return CultureInfo.InvariantCulture.TextInfo.ToTitleCase(normalized.ToLowerInvariant());
     }
 
     private static string FormatUsedPercent(CodexWindow window)
@@ -2237,12 +2462,14 @@ internal static class SelfTest
             "updatedAt=" + snapshot.UpdatedAt.ToString("o", CultureInfo.InvariantCulture),
             "codex.available=" + snapshot.Codex.Available,
             "codex.source=" + snapshot.Codex.Source,
+            "codex.planType=" + Sanitize(snapshot.Codex.PlanType),
             "codex.fallbackError=" + Sanitize(snapshot.Codex.FallbackError),
             "codex.primaryRemaining=" + NullableDouble(snapshot.Codex.Primary == null ? null : snapshot.Codex.Primary.RemainingPercent),
             "codex.secondaryRemaining=" + NullableDouble(snapshot.Codex.Secondary == null ? null : snapshot.Codex.Secondary.RemainingPercent),
             "codex.totalTokens=" + snapshot.Codex.TotalTokens,
             "claude.available=" + snapshot.Claude.Available,
             "claude.source=" + snapshot.Claude.Source,
+            "claude.planType=" + Sanitize(snapshot.Claude.PlanType),
             "claude.fallbackError=" + Sanitize(snapshot.Claude.FallbackError),
             "claude.realtimeFiveHourRemaining=" + NullableDouble(snapshot.Claude.RealtimeFiveHour == null ? null : snapshot.Claude.RealtimeFiveHour.RemainingPercent),
             "claude.realtimeWeekRemaining=" + NullableDouble(snapshot.Claude.RealtimeWeek == null ? null : snapshot.Claude.RealtimeWeek.RemainingPercent),
@@ -2309,6 +2536,17 @@ internal sealed class CodexSnapshot
             Timestamp = DateTimeOffset.Now
         };
     }
+
+    public static CodexSnapshot Hidden()
+    {
+        return new CodexSnapshot
+        {
+            Available = false,
+            Error = "hidden",
+            Source = "hidden",
+            Timestamp = DateTimeOffset.Now
+        };
+    }
 }
 
 internal sealed class CodexWindow
@@ -2325,6 +2563,7 @@ internal sealed class ClaudeSnapshot
     public string Error;
     public string Source;
     public string FallbackError;
+    public string PlanType;
     public int WindowMinutes;
     public int WeekWindowMinutes;
     public int MessageBudget;
@@ -2430,6 +2669,16 @@ internal sealed class ClaudeSnapshot
             Available = false,
             Source = "none",
             Error = error
+        };
+    }
+
+    public static ClaudeSnapshot Hidden()
+    {
+        return new ClaudeSnapshot
+        {
+            Available = false,
+            Source = "hidden",
+            Error = "hidden"
         };
     }
 }
