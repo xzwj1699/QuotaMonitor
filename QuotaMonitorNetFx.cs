@@ -1145,6 +1145,7 @@ internal sealed class UsagePaceChartControl : Control
     public UsagePaceChartControl()
     {
         DoubleBuffered = true;
+        ResizeRedraw = true;
         BackColor = Color.FromArgb(248, 249, 250);
         Dock = DockStyle.Fill;
         Margin = new Padding(0, 8, 0, 6);
@@ -1178,8 +1179,7 @@ internal sealed class UsagePaceChartControl : Control
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
 
-        var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
-        var plot = new Rectangle(10, 34, Width - 20, Height - 46);
+        var plot = CalculatePlotRectangle();
         var borderColor = Color.FromArgb(214, 219, 226);
         var gridColor = Color.FromArgb(229, 233, 238);
         var idealColor = Color.FromArgb(142, 151, 164);
@@ -1199,6 +1199,11 @@ internal sealed class UsagePaceChartControl : Control
         if (!_resetAt.HasValue || _windowMinutes <= 0)
         {
             TextRenderer.DrawText(g, "No pace data yet", Font, plot, Color.FromArgb(92, 98, 108));
+            return;
+        }
+
+        if (plot.Width < 24 || plot.Height < 24)
+        {
             return;
         }
 
@@ -1269,6 +1274,39 @@ internal sealed class UsagePaceChartControl : Control
             idealLabel,
             idealColor,
             TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoClipping);
+    }
+
+    private Rectangle CalculatePlotRectangle()
+    {
+        var available = new Rectangle(
+            10,
+            34,
+            Math.Max(1, Width - 20),
+            Math.Max(1, Height - 46));
+
+        var plotWidth = available.Width;
+        var plotHeight = available.Height;
+        var aspect = plotWidth / (double)plotHeight;
+        const double minAspect = 1.25;
+        const double maxAspect = 2.45;
+
+        if (aspect < minAspect)
+        {
+            plotHeight = Math.Max(24, (int)Math.Round(plotWidth / minAspect));
+        }
+        else if (aspect > maxAspect)
+        {
+            plotWidth = Math.Max(24, (int)Math.Round(plotHeight * maxAspect));
+        }
+
+        plotWidth = Math.Min(plotWidth, available.Width);
+        plotHeight = Math.Min(plotHeight, available.Height);
+
+        return new Rectangle(
+            available.Left + (available.Width - plotWidth) / 2,
+            available.Top + (available.Height - plotHeight) / 3,
+            plotWidth,
+            plotHeight);
     }
 
     private string BuildTitle()
@@ -1456,14 +1494,13 @@ internal sealed class MainForm : Form
         var column = new TableLayoutPanel();
         column.Dock = DockStyle.Fill;
         column.ColumnCount = 1;
-        column.RowCount = 5;
+        column.RowCount = 4;
         column.Padding = new Padding(10, 8, 10, 8);
         column.Margin = new Padding(4);
         column.BackColor = Color.FromArgb(248, 249, 250);
         column.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
         column.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
         column.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
-        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 246));
         column.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         var nameLabel = new Label();
