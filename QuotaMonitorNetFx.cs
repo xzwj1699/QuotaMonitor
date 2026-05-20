@@ -818,6 +818,13 @@ internal sealed class QuotaBarControl : Control
     public QuotaBarControl()
     {
         DoubleBuffered = true;
+        ResizeRedraw = true;
+        SetStyle(
+            ControlStyles.UserPaint |
+            ControlStyles.AllPaintingInWmPaint |
+            ControlStyles.OptimizedDoubleBuffer |
+            ControlStyles.ResizeRedraw,
+            true);
         BackColor = Color.FromArgb(248, 249, 250);
         MinimumSize = new Size(260, 72);
         Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point);
@@ -841,6 +848,7 @@ internal sealed class QuotaBarControl : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+        g.Clear(BackColor);
 
         var titleColor = PickTextColor(_remainingPercent);
         var detailColor = Color.FromArgb(92, 98, 108);
@@ -868,25 +876,36 @@ internal sealed class QuotaBarControl : Control
             detailColor,
             TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
 
-        var barRect = new Rectangle(0, Height - 15, Width - 1, 10);
+        var barRect = new Rectangle(0, Height - 15, Math.Max(1, Width - 1), 10);
         using (var trackBrush = new SolidBrush(trackColor))
         using (var fillBrush = new SolidBrush(fillColor))
         using (var borderPen = new Pen(borderColor))
+        using (var trackPath = RoundedRect(barRect, 4))
         {
-            using (var trackPath = RoundedRect(barRect, 4))
-            {
-                g.FillPath(trackBrush, trackPath);
-                g.DrawPath(borderPen, trackPath);
-            }
+            g.FillPath(trackBrush, trackPath);
             if (_remainingPercent.HasValue)
             {
-                var fillWidth = Math.Max(1, (int)Math.Round((barRect.Width - 1) * _remainingPercent.Value / 100.0));
-                var fillRect = new Rectangle(barRect.X, barRect.Y, fillWidth, barRect.Height);
-                using (var fillPath = RoundedRect(fillRect, 4))
+                var fillWidth = (int)Math.Round(barRect.Width * _remainingPercent.Value / 100.0);
+                if (fillWidth > 0)
                 {
-                    g.FillPath(fillBrush, fillPath);
+                    var state = g.Save();
+                    try
+                    {
+                        g.SetClip(trackPath);
+                        var fillRect = new Rectangle(barRect.X, barRect.Y, Math.Min(fillWidth, barRect.Width), barRect.Height);
+                        using (var fillPath = RoundedRect(fillRect, 4))
+                        {
+                            g.FillPath(fillBrush, fillPath);
+                        }
+                    }
+                    finally
+                    {
+                        g.Restore(state);
+                    }
                 }
             }
+
+            g.DrawPath(borderPen, trackPath);
         }
     }
 
