@@ -724,7 +724,7 @@ internal static class QuotaReader
     private static double NormalizePercent(string fieldName, double value)
     {
         var name = (fieldName ?? "").ToLowerInvariant();
-        if ((name.Contains("utilization") || name.Contains("utilisation") || !name.Contains("percent")) &&
+        if ((name.Contains("ratio") || name.Contains("fraction")) &&
             value >= 0 &&
             value <= 1)
         {
