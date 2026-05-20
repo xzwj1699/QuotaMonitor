@@ -1197,12 +1197,14 @@ internal sealed class UsagePaceChartControl : Control
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+        g.Clear(BackColor);
 
         var plot = CalculatePlotRectangle();
         var borderColor = Color.FromArgb(214, 219, 226);
         var gridColor = Color.FromArgb(229, 233, 238);
         var idealColor = Color.FromArgb(142, 151, 164);
         var actualColor = Color.FromArgb(37, 120, 214);
+        var axisColor = Color.FromArgb(111, 119, 132);
 
         using (var titleFont = new Font(Font, FontStyle.Bold))
         {
@@ -1236,6 +1238,7 @@ internal sealed class UsagePaceChartControl : Control
         var now = DateTimeOffset.Now;
         var windowStart = _resetAt.Value.AddMinutes(-_windowMinutes);
         var nowX = Clamp01((now - windowStart).TotalMinutes / _windowMinutes);
+        DrawAxes(g, plot, windowStart, _resetAt.Value, axisColor, gridColor);
 
         using (var idealPen = new Pen(idealColor, 1.5F))
         {
@@ -1297,11 +1300,15 @@ internal sealed class UsagePaceChartControl : Control
 
     private Rectangle CalculatePlotRectangle()
     {
+        const int leftMargin = 40;
+        const int topMargin = 34;
+        const int rightMargin = 10;
+        const int bottomMargin = 30;
         var available = new Rectangle(
-            10,
-            34,
-            Math.Max(1, Width - 20),
-            Math.Max(1, Height - 46));
+            leftMargin,
+            topMargin,
+            Math.Max(1, Width - leftMargin - rightMargin),
+            Math.Max(1, Height - topMargin - bottomMargin));
 
         var plotWidth = available.Width;
         var plotHeight = available.Height;
@@ -1326,6 +1333,69 @@ internal sealed class UsagePaceChartControl : Control
             available.Top + (available.Height - plotHeight) / 3,
             plotWidth,
             plotHeight);
+    }
+
+    private void DrawAxes(Graphics g, Rectangle plot, DateTimeOffset windowStart, DateTimeOffset resetAt, Color axisColor, Color gridColor)
+    {
+        using (var labelFont = new Font(Font.FontFamily, 7.5F, FontStyle.Regular, GraphicsUnit.Point))
+        using (var tickPen = new Pen(gridColor))
+        {
+            DrawYLabel(g, labelFont, plot, 100, axisColor, tickPen);
+            DrawYLabel(g, labelFont, plot, 50, axisColor, tickPen);
+            DrawYLabel(g, labelFont, plot, 0, axisColor, tickPen);
+
+            var labelTop = plot.Bottom + 4;
+            var windowMiddle = windowStart.AddTicks((resetAt - windowStart).Ticks / 2);
+            var startText = FormatAxisTime(windowStart);
+            var middleText = FormatAxisTime(windowMiddle);
+            var resetText = FormatAxisTime(resetAt);
+
+            TextRenderer.DrawText(
+                g,
+                startText,
+                labelFont,
+                new Rectangle(plot.Left - 2, labelTop, 92, 18),
+                axisColor,
+                TextFormatFlags.Left | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+
+            if (plot.Width >= 260)
+            {
+                g.DrawLine(tickPen, plot.Left + plot.Width / 2, plot.Bottom, plot.Left + plot.Width / 2, plot.Bottom + 4);
+                TextRenderer.DrawText(
+                    g,
+                    middleText,
+                    labelFont,
+                    new Rectangle(plot.Left + plot.Width / 2 - 46, labelTop, 92, 18),
+                    axisColor,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+            }
+
+            TextRenderer.DrawText(
+                g,
+                resetText,
+                labelFont,
+                new Rectangle(plot.Right - 92, labelTop, 92, 18),
+                axisColor,
+                TextFormatFlags.Right | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+        }
+    }
+
+    private static void DrawYLabel(Graphics g, Font labelFont, Rectangle plot, int percent, Color axisColor, Pen tickPen)
+    {
+        var y = plot.Bottom - (int)Math.Round(plot.Height * percent / 100.0);
+        g.DrawLine(tickPen, plot.Left - 4, y, plot.Left, y);
+        TextRenderer.DrawText(
+            g,
+            percent.ToString(CultureInfo.InvariantCulture) + "%",
+            labelFont,
+            new Rectangle(0, y - 8, plot.Left - 7, 16),
+            axisColor,
+            TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+    }
+
+    private static string FormatAxisTime(DateTimeOffset value)
+    {
+        return value.LocalDateTime.ToString("M/d HH:mm", CultureInfo.InvariantCulture);
     }
 
     private string BuildTitle()
