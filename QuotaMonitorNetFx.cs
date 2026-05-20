@@ -1089,6 +1089,27 @@ internal sealed class UsageSample
     }
 }
 
+internal enum ChartMode
+{
+    Pace,
+    History
+}
+
+internal enum HistoryAggregation
+{
+    Day,
+    Week,
+    Month
+}
+
+internal sealed class UsageHistoryPoint
+{
+    public DateTime PeriodStart;
+    public string Label;
+    public double UsedPercent;
+    public double CumulativePercent;
+}
+
 internal static class UsageHistoryStore
 {
     private static readonly object Gate = new object();
@@ -1176,6 +1197,179 @@ internal static class UsageHistoryStore
             .Select(g => g.Last())
             .OrderBy(s => s.TimestampValue)
             .ToList();
+    }
+
+    public static List<UsageHistoryPoint> LoadUsageHistory(string service, string window, HistoryAggregation aggregation)
+    {
+        return BuildUsageHistory(LoadAll(service, window), aggregation);
+    }
+
+    private static List<UsageSample> LoadAll(string service, string window)
+    {
+        var result = new List<UsageSample>();
+        if (!File.Exists(HistoryPath))
+        {
+            return result;
+        }
+
+        lock (Gate)
+        {
+            foreach (var line in File.ReadLines(HistoryPath).Reverse().Take(50000).Reverse())
+            {
+                var dict = Json.ParseObject(line);
+                if (dict == null)
+                {
+                    continue;
+                }
+
+                var sampleService = Json.String(dict, "Service");
+                var sampleWindow = Json.String(dict, "Window");
+                if (!string.Equals(sampleService, service, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(sampleWindow, window, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var timestamp = Json.FlexibleDate(Json.Value(dict, "Timestamp"));
+                var resetAt = Json.FlexibleDate(Json.Value(dict, "ResetAt"));
+                var used = Json.Double(dict, "UsedPercent");
+                var windowMinutes = Json.Int(dict, "WindowMinutes") ?? 0;
+                if (!timestamp.HasValue || !resetAt.HasValue || !used.HasValue || windowMinutes <= 0)
+                {
+                    continue;
+                }
+
+                result.Add(new UsageSample
+                {
+                    Service = sampleService,
+                    Window = sampleWindow,
+                    Timestamp = timestamp.Value.ToString("o", CultureInfo.InvariantCulture),
+                    UsedPercent = Math.Max(0, Math.Min(100, used.Value)),
+                    ResetAt = resetAt.Value.ToString("o", CultureInfo.InvariantCulture),
+                    WindowMinutes = windowMinutes
+                });
+            }
+        }
+
+        return result
+            .GroupBy(s => s.Timestamp)
+            .Select(g => g.Last())
+            .OrderBy(s => s.TimestampValue)
+            .ToList();
+    }
+
+    private static List<UsageHistoryPoint> BuildUsageHistory(List<UsageSample> samples, HistoryAggregation aggregation)
+    {
+        var bucketCount = aggregation == HistoryAggregation.Day ? 14 : aggregation == HistoryAggregation.Week ? 8 : 6;
+        var currentBucket = BucketStart(DateTime.Now, aggregation);
+        var firstBucket = AddPeriods(currentBucket, aggregation, -bucketCount + 1);
+        var buckets = new SortedDictionary<DateTime, double>();
+        for (var i = 0; i < bucketCount; i++)
+        {
+            buckets[AddPeriods(firstBucket, aggregation, i)] = 0;
+        }
+
+        UsageSample previous = null;
+        for (var i = 0; i < samples.Count; i++)
+        {
+            var current = samples[i];
+            if (IsSpuriousPeak(samples, i))
+            {
+                continue;
+            }
+
+            if (previous != null)
+            {
+                var sameWindow = Math.Abs((current.ResetAtValue - previous.ResetAtValue).TotalMinutes) <= 2;
+                var delta = current.UsedPercent - previous.UsedPercent;
+                if (sameWindow && delta > 0.01)
+                {
+                    var bucket = BucketStart(current.TimestampValue.LocalDateTime, aggregation);
+                    if (bucket >= firstBucket && bucket <= currentBucket)
+                    {
+                        buckets[bucket] = buckets[bucket] + delta;
+                    }
+                }
+            }
+
+            previous = current;
+        }
+
+        var result = new List<UsageHistoryPoint>();
+        double cumulative = 0;
+        foreach (var bucket in buckets)
+        {
+            cumulative += bucket.Value;
+            result.Add(new UsageHistoryPoint
+            {
+                PeriodStart = bucket.Key,
+                Label = FormatBucketLabel(bucket.Key, aggregation),
+                UsedPercent = Math.Max(0, bucket.Value),
+                CumulativePercent = Math.Max(0, cumulative)
+            });
+        }
+
+        return result;
+    }
+
+    private static bool IsSpuriousPeak(List<UsageSample> samples, int index)
+    {
+        if (index <= 0 || index >= samples.Count - 1)
+        {
+            return false;
+        }
+
+        var previous = samples[index - 1];
+        var current = samples[index];
+        var next = samples[index + 1];
+        var samePreviousWindow = Math.Abs((current.ResetAtValue - previous.ResetAtValue).TotalMinutes) <= 2;
+        var sameNextWindow = Math.Abs((next.ResetAtValue - current.ResetAtValue).TotalMinutes) <= 2;
+        return samePreviousWindow &&
+            sameNextWindow &&
+            current.UsedPercent >= 99 &&
+            previous.UsedPercent <= 60 &&
+            next.UsedPercent <= 60 &&
+            current.UsedPercent - Math.Max(previous.UsedPercent, next.UsedPercent) >= 30;
+    }
+
+    private static DateTime BucketStart(DateTime value, HistoryAggregation aggregation)
+    {
+        var date = value.Date;
+        if (aggregation == HistoryAggregation.Day)
+        {
+            return date;
+        }
+        if (aggregation == HistoryAggregation.Week)
+        {
+            var daysSinceMonday = ((int)date.DayOfWeek + 6) % 7;
+            return date.AddDays(-daysSinceMonday);
+        }
+
+        return new DateTime(date.Year, date.Month, 1);
+    }
+
+    private static DateTime AddPeriods(DateTime value, HistoryAggregation aggregation, int periods)
+    {
+        if (aggregation == HistoryAggregation.Day)
+        {
+            return value.AddDays(periods);
+        }
+        if (aggregation == HistoryAggregation.Week)
+        {
+            return value.AddDays(periods * 7);
+        }
+
+        return value.AddMonths(periods);
+    }
+
+    private static string FormatBucketLabel(DateTime value, HistoryAggregation aggregation)
+    {
+        if (aggregation == HistoryAggregation.Month)
+        {
+            return value.ToString("yyyy/M", CultureInfo.InvariantCulture);
+        }
+
+        return value.ToString("M/d", CultureInfo.InvariantCulture);
     }
 
     private static List<UsageSample> BuildSamples(QuotaSnapshot snapshot)
@@ -1489,6 +1683,258 @@ internal sealed class UsagePaceChartControl : Control
     }
 }
 
+internal sealed class UsageHistoryChartControl : Control
+{
+    private string _title = "Usage history";
+    private HistoryAggregation _aggregation = HistoryAggregation.Day;
+    private List<UsageHistoryPoint> _points = new List<UsageHistoryPoint>();
+
+    public UsageHistoryChartControl()
+    {
+        DoubleBuffered = true;
+        ResizeRedraw = true;
+        BackColor = Color.FromArgb(248, 249, 250);
+        Dock = DockStyle.Fill;
+        MinimumSize = new Size(260, 160);
+        Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point);
+    }
+
+    public void SetData(string title, HistoryAggregation aggregation, List<UsageHistoryPoint> points)
+    {
+        _title = title ?? "Usage history";
+        _aggregation = aggregation;
+        _points = points ?? new List<UsageHistoryPoint>();
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+        g.Clear(BackColor);
+
+        var plot = CalculatePlotRectangle();
+        var borderColor = Color.FromArgb(214, 219, 226);
+        var gridColor = Color.FromArgb(229, 233, 238);
+        var axisColor = Color.FromArgb(111, 119, 132);
+        var barColor = Color.FromArgb(92, 151, 224);
+        var lineColor = Color.FromArgb(37, 120, 214);
+
+        using (var titleFont = new Font(Font, FontStyle.Bold))
+        {
+            TextRenderer.DrawText(
+                g,
+                _title + " - " + AggregationLabel(_aggregation),
+                titleFont,
+                new Rectangle(0, 1, Width - 8, 20),
+                Color.FromArgb(48, 54, 64),
+                TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        }
+
+        if (plot.Width < 24 || plot.Height < 24)
+        {
+            return;
+        }
+
+        var maxValue = CalculateMaxValue(_points);
+        DrawAxes(g, plot, maxValue, axisColor, gridColor);
+
+        using (var gridPen = new Pen(gridColor))
+        using (var borderPen = new Pen(borderColor))
+        {
+            g.DrawLine(gridPen, plot.Left, plot.Top + plot.Height / 2, plot.Right, plot.Top + plot.Height / 2);
+            g.DrawRectangle(borderPen, plot);
+        }
+
+        if (_points.Count == 0)
+        {
+            TextRenderer.DrawText(g, "No history yet", Font, plot, Color.FromArgb(92, 98, 108));
+            return;
+        }
+
+        var slotWidth = plot.Width / (double)Math.Max(1, _points.Count);
+        var barWidth = Math.Max(3, Math.Min(26, (int)Math.Round(slotWidth * 0.52)));
+        using (var barBrush = new SolidBrush(Color.FromArgb(150, barColor)))
+        {
+            for (var i = 0; i < _points.Count; i++)
+            {
+                var point = _points[i];
+                var x = plot.Left + (float)(slotWidth * i + slotWidth / 2.0);
+                var barHeight = (float)(plot.Height * Math.Max(0, point.UsedPercent) / maxValue);
+                var barRect = new RectangleF(
+                    x - barWidth / 2F,
+                    plot.Bottom - barHeight,
+                    barWidth,
+                    barHeight);
+                g.FillRectangle(barBrush, barRect);
+            }
+        }
+
+        var linePoints = new List<PointF>();
+        for (var i = 0; i < _points.Count; i++)
+        {
+            var point = _points[i];
+            var x = plot.Left + (float)(slotWidth * i + slotWidth / 2.0);
+            var y = plot.Bottom - (float)(plot.Height * Math.Max(0, point.CumulativePercent) / maxValue);
+            linePoints.Add(new PointF(x, y));
+        }
+
+        if (linePoints.Count >= 2)
+        {
+            using (var linePen = new Pen(lineColor, 2F))
+            {
+                g.DrawLines(linePen, linePoints.ToArray());
+            }
+        }
+
+        using (var pointBrush = new SolidBrush(lineColor))
+        {
+            foreach (var point in linePoints)
+            {
+                g.FillEllipse(pointBrush, point.X - 2, point.Y - 2, 4, 4);
+            }
+        }
+
+        using (var legendFont = new Font(Font.FontFamily, 7.5F, FontStyle.Regular, GraphicsUnit.Point))
+        {
+            TextRenderer.DrawText(
+                g,
+                "bars: period  line: cumulative",
+                legendFont,
+                new Rectangle(plot.Left, plot.Top + 3, plot.Width - 4, 16),
+                axisColor,
+                TextFormatFlags.Right | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+        }
+    }
+
+    private Rectangle CalculatePlotRectangle()
+    {
+        const int leftMargin = 50;
+        const int topMargin = 34;
+        const int rightMargin = 10;
+        const int bottomMargin = 30;
+        var available = new Rectangle(
+            leftMargin,
+            topMargin,
+            Math.Max(1, Width - leftMargin - rightMargin),
+            Math.Max(1, Height - topMargin - bottomMargin));
+
+        var plotWidth = available.Width;
+        var plotHeight = available.Height;
+        var aspect = plotWidth / (double)plotHeight;
+        const double minAspect = 1.25;
+        const double maxAspect = 2.45;
+
+        if (aspect < minAspect)
+        {
+            plotHeight = Math.Max(24, (int)Math.Round(plotWidth / minAspect));
+        }
+        else if (aspect > maxAspect)
+        {
+            plotWidth = Math.Max(24, (int)Math.Round(plotHeight * maxAspect));
+        }
+
+        plotWidth = Math.Min(plotWidth, available.Width);
+        plotHeight = Math.Min(plotHeight, available.Height);
+
+        return new Rectangle(
+            available.Left + (available.Width - plotWidth) / 2,
+            available.Top + (available.Height - plotHeight) / 3,
+            plotWidth,
+            plotHeight);
+    }
+
+    private void DrawAxes(Graphics g, Rectangle plot, double maxValue, Color axisColor, Color gridColor)
+    {
+        using (var labelFont = new Font(Font.FontFamily, 7.5F, FontStyle.Regular, GraphicsUnit.Point))
+        using (var tickPen = new Pen(gridColor))
+        {
+            DrawYLabel(g, labelFont, plot, maxValue, maxValue, axisColor, tickPen);
+            DrawYLabel(g, labelFont, plot, maxValue / 2.0, maxValue, axisColor, tickPen);
+            DrawYLabel(g, labelFont, plot, 0, maxValue, axisColor, tickPen);
+
+            if (_points.Count == 0)
+            {
+                return;
+            }
+
+            var labelTop = plot.Bottom + 4;
+            var first = _points.First();
+            var middle = _points[_points.Count / 2];
+            var last = _points.Last();
+
+            TextRenderer.DrawText(
+                g,
+                first.Label,
+                labelFont,
+                new Rectangle(plot.Left - 2, labelTop, 92, 18),
+                axisColor,
+                TextFormatFlags.Left | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+
+            if (plot.Width >= 260 && _points.Count > 2)
+            {
+                TextRenderer.DrawText(
+                    g,
+                    middle.Label,
+                    labelFont,
+                    new Rectangle(plot.Left + plot.Width / 2 - 46, labelTop, 92, 18),
+                    axisColor,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+            }
+
+            TextRenderer.DrawText(
+                g,
+                last.Label,
+                labelFont,
+                new Rectangle(plot.Right - 92, labelTop, 92, 18),
+                axisColor,
+                TextFormatFlags.Right | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+        }
+    }
+
+    private static void DrawYLabel(Graphics g, Font labelFont, Rectangle plot, double value, double maxValue, Color axisColor, Pen tickPen)
+    {
+        var y = plot.Bottom - (int)Math.Round(plot.Height * value / maxValue);
+        g.DrawLine(tickPen, plot.Left - 4, y, plot.Left, y);
+        TextRenderer.DrawText(
+            g,
+            value.ToString("0", CultureInfo.InvariantCulture) + "%",
+            labelFont,
+            new Rectangle(0, y - 8, plot.Left - 9, 16),
+            axisColor,
+            TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoClipping);
+    }
+
+    private static double CalculateMaxValue(List<UsageHistoryPoint> points)
+    {
+        var max = 10.0;
+        foreach (var point in points)
+        {
+            max = Math.Max(max, point.UsedPercent);
+            max = Math.Max(max, point.CumulativePercent);
+        }
+
+        return Math.Max(10, Math.Ceiling(max / 10.0) * 10.0);
+    }
+
+    private static string AggregationLabel(HistoryAggregation aggregation)
+    {
+        if (aggregation == HistoryAggregation.Week)
+        {
+            return "Week";
+        }
+        if (aggregation == HistoryAggregation.Month)
+        {
+            return "Month";
+        }
+
+        return "Day";
+    }
+}
+
 internal sealed class MainForm : Form
 {
     private readonly MonitorConfig _config;
@@ -1499,11 +1945,18 @@ internal sealed class MainForm : Form
     private readonly QuotaBarControl _claudeWeek;
     private readonly UsagePaceChartControl _codexPaceChart;
     private readonly UsagePaceChartControl _claudePaceChart;
+    private readonly UsageHistoryChartControl _codexHistoryChart;
+    private readonly UsageHistoryChartControl _claudeHistoryChart;
     private readonly Label _codexPlanLabel;
     private readonly Label _claudePlanLabel;
     private readonly Label _status;
     private readonly Button _refreshButton;
     private readonly CheckBox _topMostCheckBox;
+    private readonly Button _paceModeButton;
+    private readonly Button _historyModeButton;
+    private readonly Button _dayHistoryButton;
+    private readonly Button _weekHistoryButton;
+    private readonly Button _monthHistoryButton;
     private TableLayoutPanel _columns;
     private Control _codexColumn;
     private Control _claudeColumn;
@@ -1513,6 +1966,8 @@ internal sealed class MainForm : Form
     private volatile bool _refreshInProgress;
     private bool _syncingTopMostControl;
     private bool _syncingServiceMenu;
+    private ChartMode _chartMode = ChartMode.Pace;
+    private HistoryAggregation _historyAggregation = HistoryAggregation.Day;
 
     public MainForm()
     {
@@ -1543,11 +1998,18 @@ internal sealed class MainForm : Form
         _claudeWeek = new QuotaBarControl();
         _codexPaceChart = new UsagePaceChartControl();
         _claudePaceChart = new UsagePaceChartControl();
+        _codexHistoryChart = new UsageHistoryChartControl();
+        _claudeHistoryChart = new UsageHistoryChartControl();
         _codexPlanLabel = new Label();
         _claudePlanLabel = new Label();
         _status = new Label();
         _refreshButton = new Button();
         _topMostCheckBox = new CheckBox();
+        _paceModeButton = new Button();
+        _historyModeButton = new Button();
+        _dayHistoryButton = new Button();
+        _weekHistoryButton = new Button();
+        _monthHistoryButton = new Button();
 
         BuildUi();
         BuildMenu();
@@ -1564,6 +2026,7 @@ internal sealed class MainForm : Form
             _claudeWeek.SetData("Week", "Loading...", null);
             _codexPaceChart.SetData("Codex Week pace", null, null);
             _claudePaceChart.SetData("Claude 7d pace", null, null);
+            RenderHistoryCharts();
             RefreshSnapshot();
             _timer.Start();
         };
@@ -1574,20 +2037,23 @@ internal sealed class MainForm : Form
         var root = new TableLayoutPanel();
         root.Dock = DockStyle.Fill;
         root.ColumnCount = 1;
-        root.RowCount = 2;
+        root.RowCount = 3;
         root.Padding = new Padding(10);
         root.BackColor = BackColor;
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+
+        root.Controls.Add(BuildChartToolbar(), 0, 0);
 
         _columns = new TableLayoutPanel();
         _columns.Dock = DockStyle.Fill;
         _columns.RowCount = 1;
         _columns.Margin = new Padding(0, 0, 0, 8);
-        _codexColumn = BuildServiceColumn("Codex", _codexPlanLabel, _codexFiveHour, _codexWeek, _codexPaceChart);
-        _claudeColumn = BuildServiceColumn("Claude", _claudePlanLabel, _claudeFiveHour, _claudeWeek, _claudePaceChart);
+        _codexColumn = BuildServiceColumn("Codex", _codexPlanLabel, _codexFiveHour, _codexWeek, _codexPaceChart, _codexHistoryChart);
+        _claudeColumn = BuildServiceColumn("Claude", _claudePlanLabel, _claudeFiveHour, _claudeWeek, _claudePaceChart, _claudeHistoryChart);
         ApplyServiceVisibility(false);
-        root.Controls.Add(_columns, 0, 0);
+        root.Controls.Add(_columns, 0, 1);
 
         var bottom = new TableLayoutPanel();
         bottom.Dock = DockStyle.Fill;
@@ -1629,9 +2095,94 @@ internal sealed class MainForm : Form
         bottom.Controls.Add(_status, 0, 0);
         bottom.Controls.Add(_topMostCheckBox, 1, 0);
         bottom.Controls.Add(_refreshButton, 2, 0);
-        root.Controls.Add(bottom, 0, 1);
+        root.Controls.Add(bottom, 0, 2);
 
         Controls.Add(root);
+        ApplyChartMode();
+    }
+
+    private Control BuildChartToolbar()
+    {
+        var toolbar = new FlowLayoutPanel();
+        toolbar.Dock = DockStyle.Fill;
+        toolbar.FlowDirection = FlowDirection.LeftToRight;
+        toolbar.WrapContents = false;
+        toolbar.BackColor = BackColor;
+        toolbar.Margin = new Padding(4, 0, 4, 4);
+
+        ConfigureToggleButton(_paceModeButton, "Pace", 76);
+        _paceModeButton.Click += delegate
+        {
+            _chartMode = ChartMode.Pace;
+            ApplyChartMode();
+        };
+        toolbar.Controls.Add(_paceModeButton);
+
+        ConfigureToggleButton(_historyModeButton, "History", 86);
+        _historyModeButton.Click += delegate
+        {
+            _chartMode = ChartMode.History;
+            ApplyChartMode();
+            RenderHistoryCharts();
+        };
+        toolbar.Controls.Add(_historyModeButton);
+
+        ConfigureToggleButton(_dayHistoryButton, "Day", 64);
+        _dayHistoryButton.Click += delegate { SetHistoryAggregation(HistoryAggregation.Day); };
+        toolbar.Controls.Add(_dayHistoryButton);
+
+        ConfigureToggleButton(_weekHistoryButton, "Week", 70);
+        _weekHistoryButton.Click += delegate { SetHistoryAggregation(HistoryAggregation.Week); };
+        toolbar.Controls.Add(_weekHistoryButton);
+
+        ConfigureToggleButton(_monthHistoryButton, "Month", 76);
+        _monthHistoryButton.Click += delegate { SetHistoryAggregation(HistoryAggregation.Month); };
+        toolbar.Controls.Add(_monthHistoryButton);
+
+        return toolbar;
+    }
+
+    private static void ConfigureToggleButton(Button button, string text, int width)
+    {
+        button.Text = text;
+        button.Size = new Size(width, 26);
+        button.Margin = new Padding(0, 2, 8, 2);
+        button.FlatStyle = FlatStyle.Flat;
+        button.FlatAppearance.BorderSize = 1;
+        button.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point);
+    }
+
+    private void SetHistoryAggregation(HistoryAggregation aggregation)
+    {
+        _historyAggregation = aggregation;
+        _chartMode = ChartMode.History;
+        ApplyChartMode();
+        RenderHistoryCharts();
+    }
+
+    private void ApplyChartMode()
+    {
+        var showHistory = _chartMode == ChartMode.History;
+        _codexPaceChart.Visible = !showHistory;
+        _claudePaceChart.Visible = !showHistory;
+        _codexHistoryChart.Visible = showHistory;
+        _claudeHistoryChart.Visible = showHistory;
+
+        StyleToggleButton(_paceModeButton, _chartMode == ChartMode.Pace);
+        StyleToggleButton(_historyModeButton, _chartMode == ChartMode.History);
+        StyleToggleButton(_dayHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Day);
+        StyleToggleButton(_weekHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Week);
+        StyleToggleButton(_monthHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Month);
+        _dayHistoryButton.Enabled = showHistory;
+        _weekHistoryButton.Enabled = showHistory;
+        _monthHistoryButton.Enabled = showHistory;
+    }
+
+    private static void StyleToggleButton(Button button, bool selected)
+    {
+        button.FlatAppearance.BorderColor = selected ? Color.FromArgb(37, 120, 214) : Color.FromArgb(200, 205, 212);
+        button.BackColor = selected ? Color.FromArgb(224, 238, 255) : Color.FromArgb(244, 246, 249);
+        button.ForeColor = selected ? Color.FromArgb(24, 78, 148) : Color.FromArgb(52, 58, 66);
     }
 
     private void ApplyServiceVisibility(bool persist)
@@ -1733,7 +2284,7 @@ internal sealed class MainForm : Form
         button.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
     }
 
-    private static Control BuildServiceColumn(string name, Label planLabel, QuotaBarControl first, QuotaBarControl second, UsagePaceChartControl chart)
+    private static Control BuildServiceColumn(string name, Label planLabel, QuotaBarControl first, QuotaBarControl second, UsagePaceChartControl paceChart, UsageHistoryChartControl historyChart)
     {
         var column = new TableLayoutPanel();
         column.Dock = DockStyle.Fill;
@@ -1776,10 +2327,17 @@ internal sealed class MainForm : Form
 
         first.Dock = DockStyle.Fill;
         second.Dock = DockStyle.Fill;
-        chart.Dock = DockStyle.Fill;
+        paceChart.Dock = DockStyle.Fill;
+        historyChart.Dock = DockStyle.Fill;
         first.Margin = new Padding(0, 0, 0, 2);
         second.Margin = new Padding(0, 2, 0, 0);
-        chart.Margin = new Padding(0, 12, 0, 0);
+
+        var chartHost = new Panel();
+        chartHost.Dock = DockStyle.Fill;
+        chartHost.Margin = new Padding(0, 12, 0, 0);
+        chartHost.BackColor = Color.FromArgb(248, 249, 250);
+        chartHost.Controls.Add(historyChart);
+        chartHost.Controls.Add(paceChart);
 
         header.Controls.Add(nameLabel, 0, 0);
         header.Controls.Add(planLabel, 0, 1);
@@ -1787,7 +2345,7 @@ internal sealed class MainForm : Form
         column.Controls.Add(header, 0, 0);
         column.Controls.Add(first, 0, 1);
         column.Controls.Add(second, 0, 2);
-        column.Controls.Add(chart, 0, 3);
+        column.Controls.Add(chartHost, 0, 3);
         return column;
     }
 
@@ -1939,6 +2497,7 @@ internal sealed class MainForm : Form
                         RenderCodex(snapshot.Codex);
                         RenderClaude(snapshot.Claude);
                         RenderPaceCharts(snapshot);
+                        RenderHistoryCharts();
                         _status.Text = string.Format(
                             CultureInfo.InvariantCulture,
                             "Updated {0:HH:mm:ss}",
@@ -2085,6 +2644,19 @@ internal sealed class MainForm : Form
             ? UsageHistoryStore.Load("Claude", "7d", snapshot.Claude.RealtimeWeek.ResetsAt.Value)
             : new List<UsageSample>();
         _claudePaceChart.SetData("Claude 7d pace", snapshot.Claude.RealtimeWeek, claudeSamples);
+    }
+
+    private void RenderHistoryCharts()
+    {
+        _codexHistoryChart.SetData(
+            "Codex Week usage",
+            _historyAggregation,
+            UsageHistoryStore.LoadUsageHistory("Codex", "Week", _historyAggregation));
+
+        _claudeHistoryChart.SetData(
+            "Claude 7d usage",
+            _historyAggregation,
+            UsageHistoryStore.LoadUsageHistory("Claude", "7d", _historyAggregation));
     }
 
     private static string FormatCodexRemaining(CodexWindow window, string label)
