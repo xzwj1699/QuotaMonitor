@@ -867,6 +867,59 @@ internal static class QuotaReader
     }
 }
 
+internal sealed class ServiceHeaderControl : Control
+{
+    private readonly string _serviceName;
+    private string _planText = "Plan: --";
+
+    public ServiceHeaderControl(string serviceName)
+    {
+        _serviceName = serviceName ?? "";
+        DoubleBuffered = true;
+        BackColor = Color.FromArgb(248, 249, 250);
+        Dock = DockStyle.Fill;
+        Margin = new Padding(0);
+        MinimumSize = new Size(120, 44);
+        Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+    }
+
+    public void SetPlan(string planText)
+    {
+        _planText = string.IsNullOrWhiteSpace(planText) ? "Plan: unknown" : planText;
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        var g = e.Graphics;
+        g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+        g.Clear(BackColor);
+
+        using (var titleFont = new Font("Segoe UI", 12F, FontStyle.Bold, GraphicsUnit.Point))
+        {
+            TextRenderer.DrawText(
+                g,
+                _serviceName,
+                titleFont,
+                new Rectangle(0, 0, Width, 25),
+                Color.FromArgb(30, 34, 40),
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        }
+
+        using (var planFont = new Font("Segoe UI", 8.25F, FontStyle.Regular, GraphicsUnit.Point))
+        {
+            TextRenderer.DrawText(
+                g,
+                _planText,
+                planFont,
+                new Rectangle(0, 25, Width, 18),
+                Color.FromArgb(92, 98, 108),
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        }
+    }
+}
+
 internal sealed class QuotaBarControl : Control
 {
     private string _title = "";
@@ -1982,8 +2035,8 @@ internal sealed class MainForm : Form
     private readonly UsagePaceChartControl _claudePaceChart;
     private readonly UsageHistoryChartControl _codexHistoryChart;
     private readonly UsageHistoryChartControl _claudeHistoryChart;
-    private readonly Label _codexPlanLabel;
-    private readonly Label _claudePlanLabel;
+    private readonly ServiceHeaderControl _codexHeader;
+    private readonly ServiceHeaderControl _claudeHeader;
     private readonly Label _status;
     private readonly Button _refreshButton;
     private readonly CheckBox _topMostCheckBox;
@@ -2035,8 +2088,8 @@ internal sealed class MainForm : Form
         _claudePaceChart = new UsagePaceChartControl();
         _codexHistoryChart = new UsageHistoryChartControl();
         _claudeHistoryChart = new UsageHistoryChartControl();
-        _codexPlanLabel = new Label();
-        _claudePlanLabel = new Label();
+        _codexHeader = new ServiceHeaderControl("Codex");
+        _claudeHeader = new ServiceHeaderControl("Claude");
         _status = new Label();
         _refreshButton = new Button();
         _topMostCheckBox = new CheckBox();
@@ -2083,8 +2136,8 @@ internal sealed class MainForm : Form
         _columns.Dock = DockStyle.Fill;
         _columns.RowCount = 1;
         _columns.Margin = new Padding(0, 0, 0, 8);
-        _codexColumn = BuildServiceColumn("Codex", _codexPlanLabel, _codexFiveHour, _codexWeek, _codexPaceChart, _codexHistoryChart);
-        _claudeColumn = BuildServiceColumn("Claude", _claudePlanLabel, _claudeFiveHour, _claudeWeek, _claudePaceChart, _claudeHistoryChart);
+        _codexColumn = BuildServiceColumn(_codexHeader, _codexFiveHour, _codexWeek, _codexPaceChart, _codexHistoryChart);
+        _claudeColumn = BuildServiceColumn(_claudeHeader, _claudeFiveHour, _claudeWeek, _claudePaceChart, _claudeHistoryChart);
         ApplyServiceVisibility(false);
         root.Controls.Add(_columns, 0, 0);
         root.Controls.Add(BuildChartToolbar(), 0, 1);
@@ -2322,7 +2375,7 @@ internal sealed class MainForm : Form
         button.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
     }
 
-    private static Control BuildServiceColumn(string name, Label planLabel, QuotaBarControl first, QuotaBarControl second, UsagePaceChartControl paceChart, UsageHistoryChartControl historyChart)
+    private static Control BuildServiceColumn(ServiceHeaderControl header, QuotaBarControl first, QuotaBarControl second, UsagePaceChartControl paceChart, UsageHistoryChartControl historyChart)
     {
         var column = new TableLayoutPanel();
         column.Dock = DockStyle.Fill;
@@ -2335,33 +2388,6 @@ internal sealed class MainForm : Form
         column.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
         column.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
         column.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-
-        var header = new TableLayoutPanel();
-        header.Dock = DockStyle.Fill;
-        header.ColumnCount = 1;
-        header.RowCount = 2;
-        header.Margin = new Padding(0);
-        header.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        header.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
-        header.BackColor = Color.FromArgb(248, 249, 250);
-
-        var nameLabel = new Label();
-        nameLabel.Text = name;
-        nameLabel.Dock = DockStyle.Fill;
-        nameLabel.Font = new Font("Segoe UI", 12F, FontStyle.Bold, GraphicsUnit.Point);
-        nameLabel.ForeColor = Color.FromArgb(30, 34, 40);
-        nameLabel.TextAlign = ContentAlignment.MiddleLeft;
-        nameLabel.AutoSize = false;
-        nameLabel.AutoEllipsis = true;
-
-        planLabel.Text = "Plan: --";
-        planLabel.Dock = DockStyle.Fill;
-        planLabel.Font = new Font("Segoe UI", 8.25F, FontStyle.Regular, GraphicsUnit.Point);
-        planLabel.ForeColor = Color.FromArgb(92, 98, 108);
-        planLabel.TextAlign = ContentAlignment.MiddleLeft;
-        planLabel.AutoSize = false;
-        planLabel.AutoEllipsis = true;
-        planLabel.Margin = new Padding(0);
 
         first.Dock = DockStyle.Fill;
         second.Dock = DockStyle.Fill;
@@ -2376,9 +2402,6 @@ internal sealed class MainForm : Form
         chartHost.BackColor = Color.FromArgb(248, 249, 250);
         chartHost.Controls.Add(historyChart);
         chartHost.Controls.Add(paceChart);
-
-        header.Controls.Add(nameLabel, 0, 0);
-        header.Controls.Add(planLabel, 0, 1);
 
         column.Controls.Add(header, 0, 0);
         column.Controls.Add(first, 0, 1);
@@ -2568,7 +2591,7 @@ internal sealed class MainForm : Form
 
     private void RenderCodex(CodexSnapshot codex)
     {
-        _codexPlanLabel.Text = "Plan: " + FormatPlan(codex.PlanType);
+        _codexHeader.SetPlan("Plan: " + FormatPlan(codex.PlanType));
         if (!codex.Available)
         {
             _codexFiveHour.SetData("5h", "No data: " + (codex.Error ?? ""), null);
@@ -2591,7 +2614,7 @@ internal sealed class MainForm : Form
 
     private void RenderClaude(ClaudeSnapshot claude)
     {
-        _claudePlanLabel.Text = "Plan: " + FormatPlan(claude.PlanType);
+        _claudeHeader.SetPlan("Plan: " + FormatPlan(claude.PlanType));
         if (!claude.Available)
         {
             _claudeFiveHour.SetData("5h estimate", "No data: " + (claude.Error ?? ""), null);
