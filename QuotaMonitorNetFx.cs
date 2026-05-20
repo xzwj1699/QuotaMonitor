@@ -1246,7 +1246,7 @@ internal sealed class UsagePaceChartControl : Control
             g.DrawLine(idealPen, PointFor(plot, 0, 0), PointFor(plot, 1, 100));
         }
 
-        var points = new List<PointF>();
+        var points = new List<PointF> { PointFor(plot, 0, 0) };
         foreach (var sample in _samples)
         {
             var x = Clamp01((sample.TimestampValue - windowStart).TotalMinutes / _windowMinutes);
