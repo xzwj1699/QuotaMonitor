@@ -1300,7 +1300,7 @@ internal sealed class UsagePaceChartControl : Control
 
     private Rectangle CalculatePlotRectangle()
     {
-        const int leftMargin = 40;
+        const int leftMargin = 50;
         const int topMargin = 34;
         const int rightMargin = 10;
         const int bottomMargin = 30;
@@ -1388,9 +1388,9 @@ internal sealed class UsagePaceChartControl : Control
             g,
             percent.ToString(CultureInfo.InvariantCulture) + "%",
             labelFont,
-            new Rectangle(0, y - 8, plot.Left - 7, 16),
+            new Rectangle(0, y - 8, plot.Left - 9, 16),
             axisColor,
-            TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+            TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoClipping);
     }
 
     private static string FormatAxisTime(DateTimeOffset value)
