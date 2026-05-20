@@ -1,0 +1,2309 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
+using System.Globalization;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
+
+internal static class QuotaMonitorApp
+{
+    [STAThread]
+    private static void Main(string[] args)
+    {
+        try
+        {
+            AppLog.Write("start args=" + string.Join(" ", args));
+            NativeMethods.EnableDpiAwareness();
+            if (args.Any(a => string.Equals(a, "--self-test", StringComparison.OrdinalIgnoreCase)))
+            {
+                var config = MonitorConfig.LoadOrCreate();
+                var snapshot = QuotaReader.Read(config);
+                SelfTest.Write(snapshot);
+                AppLog.Write("self-test completed");
+                return;
+            }
+
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.ThreadException += delegate(object sender, ThreadExceptionEventArgs e)
+            {
+                AppLog.Write("ui exception: " + e.Exception);
+                MessageBox.Show(e.Exception.Message, "Quota Monitor error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            };
+            AppDomain.CurrentDomain.UnhandledException += delegate(object sender, UnhandledExceptionEventArgs e)
+            {
+                AppLog.Write("unhandled exception: " + e.ExceptionObject);
+            };
+
+            Application.Run(new MainForm());
+            AppLog.Write("exit");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("fatal: " + ex);
+            MessageBox.Show(ex.Message, "Quota Monitor failed to start", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+}
+
+internal sealed class MonitorConfig
+{
+    public int pollIntervalSeconds { get; set; }
+    public bool alwaysOnTop { get; set; }
+    public bool startAtTopRight { get; set; }
+    public string codexSessionsPath { get; set; }
+    public string codexAuthPath { get; set; }
+    public string claudeProjectsPath { get; set; }
+    public string claudeCredentialsPath { get; set; }
+    public bool useRealtimeApi { get; set; }
+    public int realtimeApiTimeoutSeconds { get; set; }
+    public int claudeWindowMinutes { get; set; }
+    public int claudeWeekWindowMinutes { get; set; }
+    public int claudeFiveHourMessageBudget { get; set; }
+    public long claudeFiveHourTokenBudget { get; set; }
+    public int claudeWeeklyMessageBudget { get; set; }
+    public long claudeWeeklyTokenBudget { get; set; }
+    public double claudeCacheReadWeight { get; set; }
+    public bool claudeIncludeNonClaudeModels { get; set; }
+
+    public static string AppDir
+    {
+        get { return AppDomain.CurrentDomain.BaseDirectory; }
+    }
+
+    public static string ConfigPath
+    {
+        get { return Path.Combine(AppDir, "quota-monitor.config.json"); }
+    }
+
+    public static MonitorConfig Default()
+    {
+        return new MonitorConfig
+        {
+            pollIntervalSeconds = 300,
+            alwaysOnTop = true,
+            startAtTopRight = true,
+            codexSessionsPath = "%USERPROFILE%\\.codex\\sessions",
+            codexAuthPath = "%USERPROFILE%\\.codex\\auth.json",
+            claudeProjectsPath = "%USERPROFILE%\\.claude\\projects",
+            claudeCredentialsPath = "%USERPROFILE%\\.claude\\.credentials.json",
+            useRealtimeApi = true,
+            realtimeApiTimeoutSeconds = 15,
+            claudeWindowMinutes = 300,
+            claudeWeekWindowMinutes = 10080,
+            claudeFiveHourMessageBudget = 45,
+            claudeFiveHourTokenBudget = 0,
+            claudeWeeklyMessageBudget = 0,
+            claudeWeeklyTokenBudget = 0,
+            claudeCacheReadWeight = 0.10,
+            claudeIncludeNonClaudeModels = false
+        };
+    }
+
+    public static MonitorConfig LoadOrCreate()
+    {
+        var serializer = Json.NewSerializer();
+        if (!File.Exists(ConfigPath))
+        {
+            var created = Default();
+            File.WriteAllText(ConfigPath, serializer.Serialize(created));
+            return created;
+        }
+
+        try
+        {
+            var config = serializer.Deserialize<MonitorConfig>(File.ReadAllText(ConfigPath));
+            return config ?? Default();
+        }
+        catch
+        {
+            return Default();
+        }
+    }
+
+    public void Save()
+    {
+        var serializer = Json.NewSerializer();
+        File.WriteAllText(ConfigPath, serializer.Serialize(this));
+    }
+
+    public string ExpandedCodexSessionsPath
+    {
+        get { return ExpandPath(codexSessionsPath); }
+    }
+
+    public string ExpandedCodexAuthPath
+    {
+        get { return ExpandPath(codexAuthPath); }
+    }
+
+    public string ExpandedClaudeProjectsPath
+    {
+        get { return ExpandPath(claudeProjectsPath); }
+    }
+
+    public string ExpandedClaudeCredentialsPath
+    {
+        get { return ExpandPath(claudeCredentialsPath); }
+    }
+
+    private static string ExpandPath(string path)
+    {
+        var expanded = Environment.ExpandEnvironmentVariables(path ?? "");
+        if (expanded.StartsWith("~\\", StringComparison.Ordinal) ||
+            expanded.StartsWith("~/", StringComparison.Ordinal))
+        {
+            expanded = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                expanded.Substring(2));
+        }
+
+        return expanded;
+    }
+}
+
+internal static class QuotaReader
+{
+    public static QuotaSnapshot Read(MonitorConfig config)
+    {
+        return new QuotaSnapshot
+        {
+            UpdatedAt = DateTimeOffset.Now,
+            Codex = config.useRealtimeApi ? ReadCodexRealtimeOrLocal(config) : ReadCodexLocal(config),
+            Claude = config.useRealtimeApi ? ReadClaudeRealtimeOrLocal(config) : ReadClaudeLocal(config)
+        };
+    }
+
+    private static CodexSnapshot ReadCodexRealtimeOrLocal(MonitorConfig config)
+    {
+        var realtime = ReadCodexRealtime(config);
+        if (realtime.Available)
+        {
+            return realtime;
+        }
+
+        var local = ReadCodexLocal(config);
+        local.FallbackError = realtime.Error;
+        return local;
+    }
+
+    private static ClaudeSnapshot ReadClaudeRealtimeOrLocal(MonitorConfig config)
+    {
+        var realtime = ReadClaudeRealtime(config);
+        if (realtime.Available)
+        {
+            return realtime;
+        }
+
+        var local = ReadClaudeLocal(config);
+        local.FallbackError = realtime.Error;
+        return local;
+    }
+
+    private static CodexSnapshot ReadCodexLocal(MonitorConfig config)
+    {
+        var root = config.ExpandedCodexSessionsPath;
+        if (!Directory.Exists(root))
+        {
+            return CodexSnapshot.Missing("not found: " + root);
+        }
+
+        try
+        {
+            var files = Directory.EnumerateFiles(root, "*.jsonl", SearchOption.AllDirectories)
+                .Select(path => new FileInfo(path))
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .Take(40)
+                .ToList();
+
+            foreach (var file in files)
+            {
+                var lines = SharedFile.ReadAllLines(file.FullName);
+                for (var i = lines.Count - 1; i >= 0; i--)
+                {
+                    var obj = Json.ParseObject(lines[i]);
+                    if (obj == null || Json.String(obj, "type") != "event_msg")
+                    {
+                        continue;
+                    }
+
+                    var payload = Json.Dict(Json.Value(obj, "payload"));
+                    if (payload == null || Json.String(payload, "type") != "token_count")
+                    {
+                        continue;
+                    }
+
+                    return ParseCodex(payload, obj);
+                }
+            }
+
+            return CodexSnapshot.Missing("no token_count event");
+        }
+        catch (Exception ex)
+        {
+            return CodexSnapshot.Missing(ex.Message);
+        }
+    }
+
+    private static CodexSnapshot ParseCodex(Dictionary<string, object> payload, Dictionary<string, object> root)
+    {
+        var rateLimits = Json.Dict(Json.Value(payload, "rate_limits"));
+        var info = Json.Dict(Json.Value(payload, "info"));
+        var total = Json.Dict(Json.Value(info, "total_token_usage"));
+        var last = Json.Dict(Json.Value(info, "last_token_usage"));
+
+            return new CodexSnapshot
+            {
+                Available = true,
+                Source = "local token_count",
+                Timestamp = Json.Date(root, "timestamp") ?? DateTimeOffset.Now,
+                PlanType = Json.String(rateLimits, "plan_type") ?? "unknown",
+            LimitId = Json.String(rateLimits, "limit_id") ?? "codex",
+            RateLimitReachedType = Json.String(rateLimits, "rate_limit_reached_type"),
+            Primary = ReadCodexWindow(rateLimits, "primary"),
+            Secondary = ReadCodexWindow(rateLimits, "secondary"),
+            TotalTokens = Json.Long(total, "total_tokens") ?? 0,
+            LastTurnTokens = Json.Long(last, "total_tokens") ?? 0
+        };
+    }
+
+    private static CodexWindow ReadCodexWindow(Dictionary<string, object> rateLimits, string name)
+    {
+        var window = Json.Dict(Json.Value(rateLimits, name));
+        if (window == null)
+        {
+            return null;
+        }
+
+        var used = Json.Double(window, "used_percent");
+        return new CodexWindow
+        {
+            UsedPercent = used,
+            RemainingPercent = used.HasValue ? Clamp(100.0 - used.Value, 0, 100) : (double?)null,
+            ResetsAt = Json.UnixSeconds(window, "resets_at"),
+            WindowMinutes = Json.Int(window, "window_minutes")
+        };
+    }
+
+    private static CodexSnapshot ReadCodexRealtime(MonitorConfig config)
+    {
+        try
+        {
+            var authPath = config.ExpandedCodexAuthPath;
+            if (!File.Exists(authPath))
+            {
+                return CodexSnapshot.Missing("codex auth not found: " + authPath);
+            }
+
+            var auth = Json.ParseObject(File.ReadAllText(authPath));
+            var tokens = Json.Dict(Json.Value(auth, "tokens"));
+            var accessToken = Json.String(tokens, "access_token");
+            var accountId = Json.String(tokens, "account_id");
+            if (string.IsNullOrWhiteSpace(accessToken))
+            {
+                return CodexSnapshot.Missing("codex access token missing");
+            }
+
+            var headers = new Dictionary<string, string>
+            {
+                { "Origin", "https://chatgpt.com" },
+                { "Referer", "https://chatgpt.com/" }
+            };
+            if (!string.IsNullOrWhiteSpace(accountId))
+            {
+                headers["ChatGPT-Account-Id"] = accountId;
+            }
+
+            var response = Http.GetJson(
+                "https://chatgpt.com/backend-api/wham/usage",
+                accessToken,
+                headers,
+                Math.Max(5, config.realtimeApiTimeoutSeconds) * 1000);
+            if (response == null)
+            {
+                return CodexSnapshot.Missing("codex wham response empty");
+            }
+
+            var primary = ParseRealtimeWindow(response, new[] { "primary", "primary_window", "five_hour", "5h" });
+            var secondary = ParseRealtimeWindow(response, new[] { "secondary", "secondary_window", "weekly", "week", "seven_day", "7d" });
+
+            if (primary == null && secondary == null)
+            {
+                return CodexSnapshot.Missing("codex wham usage shape not recognized");
+            }
+
+            return new CodexSnapshot
+            {
+                Available = true,
+                Source = "codex wham/usage",
+                Timestamp = DateTimeOffset.Now,
+                PlanType = FirstString(response, new[] { "plan_type", "planType", "plan" }) ?? "unknown",
+                LimitId = "codex",
+                Primary = primary,
+                Secondary = secondary
+            };
+        }
+        catch (Exception ex)
+        {
+            return CodexSnapshot.Missing("codex realtime: " + ex.Message);
+        }
+    }
+
+    private static ClaudeSnapshot ReadClaudeRealtime(MonitorConfig config)
+    {
+        try
+        {
+            var credentialsPath = config.ExpandedClaudeCredentialsPath;
+            if (!File.Exists(credentialsPath))
+            {
+                return ClaudeSnapshot.Missing("claude credentials not found: " + credentialsPath);
+            }
+
+            var credentials = Json.ParseObject(File.ReadAllText(credentialsPath));
+            var oauth = Json.Dict(Json.Value(credentials, "claudeAiOauth"));
+            var accessToken = Json.String(oauth, "accessToken");
+            if (string.IsNullOrWhiteSpace(accessToken))
+            {
+                return ClaudeSnapshot.Missing("claude oauth access token missing");
+            }
+
+            var response = Http.GetJson(
+                "https://api.anthropic.com/api/oauth/usage",
+                accessToken,
+                new Dictionary<string, string>
+                {
+                    { "anthropic-beta", "oauth-2025-04-20" }
+                },
+                Math.Max(5, config.realtimeApiTimeoutSeconds) * 1000);
+            if (response == null)
+            {
+                return ClaudeSnapshot.Missing("claude oauth usage response empty");
+            }
+
+            var fiveHour = ParseRealtimeWindow(response, new[] { "five_hour", "fiveHour", "5h", "primary" });
+            var sevenDay = ParseRealtimeWindow(response, new[] { "seven_day", "sevenDay", "7d", "weekly", "week", "secondary" });
+            if (fiveHour == null && sevenDay == null)
+            {
+                return ClaudeSnapshot.Missing("claude oauth usage shape not recognized");
+            }
+
+            return new ClaudeSnapshot
+            {
+                Available = true,
+                Source = "claude oauth usage",
+                WindowMinutes = 300,
+                WeekWindowMinutes = 10080,
+                RealtimeFiveHour = fiveHour,
+                RealtimeWeek = sevenDay
+            };
+        }
+        catch (Exception ex)
+        {
+            return ClaudeSnapshot.Missing("claude realtime: " + ex.Message);
+        }
+    }
+
+    private static CodexWindow ParseRealtimeWindow(Dictionary<string, object> root, string[] candidateNames)
+    {
+        var window = FindWindowObject(root, candidateNames);
+        if (window == null)
+        {
+            return null;
+        }
+
+        string remainingField;
+        var remaining = FirstDouble(window, new[]
+        {
+            "remaining_percent",
+            "remainingPercent",
+            "percent_remaining",
+            "percentRemaining"
+        }, out remainingField);
+        if (remaining.HasValue)
+        {
+            remaining = NormalizePercent(remainingField, remaining.Value);
+        }
+
+        string usedField;
+        var used = FirstDouble(window, new[]
+        {
+            "used_percent",
+            "usedPercent",
+            "utilization",
+            "utilisation",
+            "usage_percent",
+            "usagePercent",
+            "used"
+        }, out usedField);
+        if (used.HasValue)
+        {
+            used = NormalizePercent(usedField, used.Value);
+        }
+
+        if (!remaining.HasValue && used.HasValue)
+        {
+            remaining = Clamp(100.0 - used.Value, 0, 100);
+        }
+        if (!used.HasValue && remaining.HasValue)
+        {
+            used = Clamp(100.0 - remaining.Value, 0, 100);
+        }
+
+        var resetsAt = FirstDate(window, new[]
+        {
+            "reset_at",
+            "resets_at",
+            "resetAt",
+            "resetsAt",
+            "next_reset_at",
+            "nextResetAt"
+        });
+        if (!resetsAt.HasValue)
+        {
+            var resetAfterSeconds = FirstLong(window, new[]
+            {
+                "reset_after_seconds",
+                "resetAfterSeconds",
+                "seconds_until_reset",
+                "secondsUntilReset"
+            });
+            if (resetAfterSeconds.HasValue)
+            {
+                resetsAt = DateTimeOffset.Now.AddSeconds(resetAfterSeconds.Value);
+            }
+        }
+
+        var windowMinutes = FirstInt(window, new[]
+        {
+            "window_minutes",
+            "windowMinutes",
+            "limit_window_minutes",
+            "limitWindowMinutes"
+        });
+        if (!windowMinutes.HasValue)
+        {
+            var windowSeconds = FirstLong(window, new[]
+            {
+                "window_seconds",
+                "windowSeconds",
+                "limit_window_seconds",
+                "limitWindowSeconds"
+            });
+            if (windowSeconds.HasValue)
+            {
+                windowMinutes = (int)Math.Round(windowSeconds.Value / 60.0);
+            }
+        }
+        if (!windowMinutes.HasValue)
+        {
+            var joined = string.Join(" ", candidateNames).ToLowerInvariant();
+            if (joined.Contains("five") || joined.Contains("5h") || joined.Contains("primary"))
+            {
+                windowMinutes = 300;
+            }
+            else if (joined.Contains("seven") || joined.Contains("7d") || joined.Contains("week") || joined.Contains("secondary"))
+            {
+                windowMinutes = 10080;
+            }
+        }
+
+        if (!remaining.HasValue && !used.HasValue && !resetsAt.HasValue)
+        {
+            return null;
+        }
+
+        return new CodexWindow
+        {
+            UsedPercent = used,
+            RemainingPercent = remaining,
+            ResetsAt = resetsAt,
+            WindowMinutes = windowMinutes
+        };
+    }
+
+    private static Dictionary<string, object> FindWindowObject(Dictionary<string, object> root, string[] candidateNames)
+    {
+        if (root == null)
+        {
+            return null;
+        }
+
+        foreach (var candidate in candidateNames)
+        {
+            var direct = FindObjectByKey(root, candidate);
+            if (direct != null)
+            {
+                return direct;
+            }
+        }
+
+        return null;
+    }
+
+    private static Dictionary<string, object> FindObjectByKey(object value, string key)
+    {
+        var dict = Json.Dict(value);
+        if (dict != null)
+        {
+            foreach (var pair in dict)
+            {
+                if (string.Equals(pair.Key, key, StringComparison.OrdinalIgnoreCase))
+                {
+                    var matched = Json.Dict(pair.Value);
+                    if (matched != null)
+                    {
+                        return matched;
+                    }
+                }
+            }
+
+            foreach (var pair in dict)
+            {
+                var nested = FindObjectByKey(pair.Value, key);
+                if (nested != null)
+                {
+                    return nested;
+                }
+            }
+        }
+
+        var array = value as object[];
+        if (array != null)
+        {
+            foreach (var item in array)
+            {
+                var nested = FindObjectByKey(item, key);
+                if (nested != null)
+                {
+                    return nested;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private static string FirstString(Dictionary<string, object> dict, string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = Json.String(dict, name);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static double? FirstDouble(Dictionary<string, object> dict, string[] names, out string matchedName)
+    {
+        matchedName = null;
+        foreach (var name in names)
+        {
+            var value = Json.Double(dict, name);
+            if (value.HasValue)
+            {
+                matchedName = name;
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static long? FirstLong(Dictionary<string, object> dict, string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = Json.Long(dict, name);
+            if (value.HasValue)
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static int? FirstInt(Dictionary<string, object> dict, string[] names)
+    {
+        foreach (var name in names)
+        {
+            var value = Json.Int(dict, name);
+            if (value.HasValue)
+            {
+                return value;
+            }
+        }
+
+        return null;
+    }
+
+    private static DateTimeOffset? FirstDate(Dictionary<string, object> dict, string[] names)
+    {
+        foreach (var name in names)
+        {
+            var raw = Json.Value(dict, name);
+            var parsed = Json.FlexibleDate(raw);
+            if (parsed.HasValue)
+            {
+                return parsed;
+            }
+        }
+
+        return null;
+    }
+
+    private static double NormalizePercent(string fieldName, double value)
+    {
+        var name = (fieldName ?? "").ToLowerInvariant();
+        if ((name.Contains("utilization") || name.Contains("utilisation") || !name.Contains("percent")) &&
+            value >= 0 &&
+            value <= 1)
+        {
+            value *= 100.0;
+        }
+
+        return Clamp(value, 0, 100);
+    }
+
+    private static ClaudeSnapshot ReadClaudeLocal(MonitorConfig config)
+    {
+        var root = config.ExpandedClaudeProjectsPath;
+        if (!Directory.Exists(root))
+        {
+            return ClaudeSnapshot.Missing("not found: " + root);
+        }
+
+        var now = DateTimeOffset.Now;
+        var windowMinutes = Math.Max(1, config.claudeWindowMinutes);
+        var weekWindowMinutes = Math.Max(windowMinutes, config.claudeWeekWindowMinutes <= 0 ? 10080 : config.claudeWeekWindowMinutes);
+        var threshold = now.AddMinutes(-windowMinutes);
+        var weekThreshold = now.AddMinutes(-weekWindowMinutes);
+        var fileThreshold = weekThreshold.UtcDateTime.AddHours(-2);
+        var result = new ClaudeSnapshot
+        {
+            Available = true,
+            Source = "local jsonl",
+            WindowMinutes = windowMinutes,
+            WeekWindowMinutes = weekWindowMinutes,
+            MessageBudget = config.claudeFiveHourMessageBudget,
+            TokenBudget = config.claudeFiveHourTokenBudget,
+            WeeklyMessageBudget = config.claudeWeeklyMessageBudget,
+            WeeklyTokenBudget = config.claudeWeeklyTokenBudget
+        };
+
+        try
+        {
+            var files = Directory.EnumerateFiles(root, "*.jsonl", SearchOption.AllDirectories)
+                .Select(path => new FileInfo(path))
+                .Where(info => info.LastWriteTimeUtc >= fileThreshold)
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .ToList();
+
+            foreach (var file in files)
+            {
+                foreach (var line in SharedFile.ReadAllLines(file.FullName))
+                {
+                    var obj = Json.ParseObject(line);
+                    var message = Json.Dict(Json.Value(obj, "message"));
+                    var usage = Json.Dict(Json.Value(message, "usage"));
+                    if (obj == null || message == null || usage == null)
+                    {
+                        continue;
+                    }
+
+                    var timestamp = Json.Date(obj, "timestamp");
+                    if (!timestamp.HasValue ||
+                        timestamp.Value < weekThreshold ||
+                        timestamp.Value > now.AddMinutes(5))
+                    {
+                        continue;
+                    }
+
+                    var model = Json.String(message, "model") ?? "";
+                    if (!config.claudeIncludeNonClaudeModels &&
+                        !model.StartsWith("claude", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var inputTokens = Json.Long(usage, "input_tokens") ?? 0;
+                    var outputTokens = Json.Long(usage, "output_tokens") ?? 0;
+                    var cacheCreationTokens = Json.Long(usage, "cache_creation_input_tokens") ?? 0;
+                    var cacheReadTokens = Json.Long(usage, "cache_read_input_tokens") ?? 0;
+
+                    result.WeeklyMessageCount++;
+                    result.WeeklyInputTokens += inputTokens;
+                    result.WeeklyOutputTokens += outputTokens;
+                    result.WeeklyCacheCreationTokens += cacheCreationTokens;
+                    result.WeeklyCacheReadTokens += cacheReadTokens;
+
+                    if (timestamp.Value >= threshold)
+                    {
+                        result.MessageCount++;
+                        result.InputTokens += inputTokens;
+                        result.OutputTokens += outputTokens;
+                        result.CacheCreationTokens += cacheCreationTokens;
+                        result.CacheReadTokens += cacheReadTokens;
+
+                        if (!result.OldestCountedAt.HasValue || timestamp.Value < result.OldestCountedAt.Value)
+                        {
+                            result.OldestCountedAt = timestamp.Value;
+                        }
+                    }
+
+                    if (model.Length > 0)
+                    {
+                        result.Models.Add(model);
+                    }
+                    if (!result.OldestWeeklyCountedAt.HasValue || timestamp.Value < result.OldestWeeklyCountedAt.Value)
+                    {
+                        result.OldestWeeklyCountedAt = timestamp.Value;
+                    }
+                }
+            }
+
+            var weight = Clamp(config.claudeCacheReadWeight, 0, 1);
+            result.WeightedTokens =
+                result.InputTokens +
+                result.OutputTokens +
+                result.CacheCreationTokens +
+                (long)Math.Round(result.CacheReadTokens * weight);
+            result.WeeklyWeightedTokens =
+                result.WeeklyInputTokens +
+                result.WeeklyOutputTokens +
+                result.WeeklyCacheCreationTokens +
+                (long)Math.Round(result.WeeklyCacheReadTokens * weight);
+
+            if (result.OldestCountedAt.HasValue)
+            {
+                result.EstimatedResetAt = result.OldestCountedAt.Value.AddMinutes(result.WindowMinutes);
+            }
+            if (result.OldestWeeklyCountedAt.HasValue)
+            {
+                result.EstimatedWeeklyResetAt = result.OldestWeeklyCountedAt.Value.AddMinutes(result.WeekWindowMinutes);
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            return ClaudeSnapshot.Missing(ex.Message);
+        }
+    }
+
+    private static double Clamp(double value, double min, double max)
+    {
+        return Math.Max(min, Math.Min(max, value));
+    }
+}
+
+internal sealed class QuotaBarControl : Control
+{
+    private string _title = "";
+    private string _detail = "";
+    private double? _remainingPercent;
+
+    public QuotaBarControl()
+    {
+        DoubleBuffered = true;
+        BackColor = Color.FromArgb(248, 249, 250);
+        MinimumSize = new Size(260, 72);
+        Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point);
+    }
+
+    public void SetData(string title, string detail, double? remainingPercent)
+    {
+        _title = title ?? "";
+        _detail = detail ?? "";
+        _remainingPercent = remainingPercent.HasValue
+            ? Math.Max(0, Math.Min(100, remainingPercent.Value))
+            : (double?)null;
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+
+        var titleColor = PickTextColor(_remainingPercent);
+        var detailColor = Color.FromArgb(92, 98, 108);
+        var trackColor = Color.FromArgb(225, 229, 235);
+        var fillColor = PickFillColor(_remainingPercent);
+        var borderColor = Color.FromArgb(214, 219, 226);
+
+        var titleBounds = new Rectangle(0, 2, Width, 20);
+        var detailBounds = new Rectangle(0, 27, Width, 18);
+        using (var titleFont = new Font(Font, FontStyle.Bold))
+        {
+            TextRenderer.DrawText(
+                g,
+                _title,
+                titleFont,
+                titleBounds,
+                titleColor,
+                TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        }
+        TextRenderer.DrawText(
+            g,
+            _detail,
+            Font,
+            detailBounds,
+            detailColor,
+            TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+
+        var barRect = new Rectangle(0, Height - 15, Width - 1, 10);
+        using (var trackBrush = new SolidBrush(trackColor))
+        using (var fillBrush = new SolidBrush(fillColor))
+        using (var borderPen = new Pen(borderColor))
+        {
+            using (var trackPath = RoundedRect(barRect, 4))
+            {
+                g.FillPath(trackBrush, trackPath);
+                g.DrawPath(borderPen, trackPath);
+            }
+            if (_remainingPercent.HasValue)
+            {
+                var fillWidth = Math.Max(1, (int)Math.Round((barRect.Width - 1) * _remainingPercent.Value / 100.0));
+                var fillRect = new Rectangle(barRect.X, barRect.Y, fillWidth, barRect.Height);
+                using (var fillPath = RoundedRect(fillRect, 4))
+                {
+                    g.FillPath(fillBrush, fillPath);
+                }
+            }
+        }
+    }
+
+    private static GraphicsPath RoundedRect(Rectangle rect, int radius)
+    {
+        var path = new GraphicsPath();
+        var diameter = radius * 2;
+        if (diameter <= 0 || rect.Width <= diameter || rect.Height <= diameter)
+        {
+            path.AddRectangle(rect);
+            path.CloseFigure();
+            return path;
+        }
+
+        path.AddArc(rect.Left, rect.Top, diameter, diameter, 180, 90);
+        path.AddArc(rect.Right - diameter, rect.Top, diameter, diameter, 270, 90);
+        path.AddArc(rect.Right - diameter, rect.Bottom - diameter, diameter, diameter, 0, 90);
+        path.AddArc(rect.Left, rect.Bottom - diameter, diameter, diameter, 90, 90);
+        path.CloseFigure();
+        return path;
+    }
+
+    private static Color PickFillColor(double? remainingPercent)
+    {
+        if (!remainingPercent.HasValue)
+        {
+            return Color.FromArgb(152, 161, 174);
+        }
+        if (remainingPercent.Value <= 10)
+        {
+            return Color.FromArgb(209, 66, 57);
+        }
+        if (remainingPercent.Value <= 25)
+        {
+            return Color.FromArgb(210, 139, 36);
+        }
+
+        return Color.FromArgb(37, 120, 214);
+    }
+
+    private static Color PickTextColor(double? remainingPercent)
+    {
+        if (!remainingPercent.HasValue)
+        {
+            return Color.FromArgb(51, 57, 66);
+        }
+        if (remainingPercent.Value <= 10)
+        {
+            return Color.FromArgb(160, 48, 42);
+        }
+        if (remainingPercent.Value <= 25)
+        {
+            return Color.FromArgb(153, 98, 20);
+        }
+
+        return Color.FromArgb(24, 78, 148);
+    }
+}
+
+internal static class AppLog
+{
+    private static readonly object Gate = new object();
+
+    public static string LogPath
+    {
+        get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "quota-monitor.log"); }
+    }
+
+    public static void Write(string message)
+    {
+        try
+        {
+            lock (Gate)
+            {
+                File.AppendAllText(
+                    LogPath,
+                    DateTimeOffset.Now.ToString("o", CultureInfo.InvariantCulture) + " " + message + Environment.NewLine);
+            }
+        }
+        catch
+        {
+            // Logging must never prevent the monitor from starting.
+        }
+    }
+}
+
+internal static class NativeMethods
+{
+    [DllImport("user32.dll")]
+    private static extern bool SetProcessDPIAware();
+
+    public static void EnableDpiAwareness()
+    {
+        try
+        {
+            SetProcessDPIAware();
+        }
+        catch
+        {
+        }
+    }
+}
+
+internal sealed class UsageSample
+{
+    public string Service { get; set; }
+    public string Window { get; set; }
+    public string Timestamp { get; set; }
+    public double UsedPercent { get; set; }
+    public string ResetAt { get; set; }
+    public int WindowMinutes { get; set; }
+
+    [ScriptIgnore]
+    public DateTimeOffset TimestampValue
+    {
+        get { return DateTimeOffset.Parse(Timestamp, CultureInfo.InvariantCulture); }
+    }
+
+    [ScriptIgnore]
+    public DateTimeOffset ResetAtValue
+    {
+        get { return DateTimeOffset.Parse(ResetAt, CultureInfo.InvariantCulture); }
+    }
+}
+
+internal static class UsageHistoryStore
+{
+    private static readonly object Gate = new object();
+
+    public static string HistoryPath
+    {
+        get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "quota-monitor-history.jsonl"); }
+    }
+
+    public static void AppendSnapshot(QuotaSnapshot snapshot)
+    {
+        var samples = BuildSamples(snapshot);
+        if (samples.Count == 0)
+        {
+            return;
+        }
+
+        var serializer = Json.NewSerializer();
+        lock (Gate)
+        {
+            using (var writer = new StreamWriter(HistoryPath, true))
+            {
+                foreach (var sample in samples)
+                {
+                    writer.WriteLine(serializer.Serialize(sample));
+                }
+            }
+        }
+    }
+
+    public static List<UsageSample> Load(string service, string window, DateTimeOffset resetAt)
+    {
+        var result = new List<UsageSample>();
+        if (!File.Exists(HistoryPath))
+        {
+            return result;
+        }
+
+        lock (Gate)
+        {
+            foreach (var line in File.ReadLines(HistoryPath).Reverse().Take(2000).Reverse())
+            {
+                var dict = Json.ParseObject(line);
+                if (dict == null)
+                {
+                    continue;
+                }
+
+                var sampleService = Json.String(dict, "Service");
+                var sampleWindow = Json.String(dict, "Window");
+                if (!string.Equals(sampleService, service, StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(sampleWindow, window, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var sampleReset = Json.FlexibleDate(Json.Value(dict, "ResetAt"));
+                if (!sampleReset.HasValue || Math.Abs((sampleReset.Value - resetAt).TotalMinutes) > 2)
+                {
+                    continue;
+                }
+
+                var timestamp = Json.FlexibleDate(Json.Value(dict, "Timestamp"));
+                var used = Json.Double(dict, "UsedPercent");
+                var windowMinutes = Json.Int(dict, "WindowMinutes") ?? 0;
+                if (!timestamp.HasValue || !used.HasValue || windowMinutes <= 0)
+                {
+                    continue;
+                }
+
+                result.Add(new UsageSample
+                {
+                    Service = sampleService,
+                    Window = sampleWindow,
+                    Timestamp = timestamp.Value.ToString("o", CultureInfo.InvariantCulture),
+                    UsedPercent = Math.Max(0, Math.Min(100, used.Value)),
+                    ResetAt = sampleReset.Value.ToString("o", CultureInfo.InvariantCulture),
+                    WindowMinutes = windowMinutes
+                });
+            }
+        }
+
+        return result
+            .GroupBy(s => s.Timestamp)
+            .Select(g => g.Last())
+            .OrderBy(s => s.TimestampValue)
+            .ToList();
+    }
+
+    private static List<UsageSample> BuildSamples(QuotaSnapshot snapshot)
+    {
+        var samples = new List<UsageSample>();
+        AddSample(samples, "Codex", "5h", snapshot.Codex.Primary, snapshot.UpdatedAt);
+        AddSample(samples, "Codex", "Week", snapshot.Codex.Secondary, snapshot.UpdatedAt);
+        AddSample(samples, "Claude", "5h", snapshot.Claude.RealtimeFiveHour, snapshot.UpdatedAt);
+        AddSample(samples, "Claude", "7d", snapshot.Claude.RealtimeWeek, snapshot.UpdatedAt);
+        return samples;
+    }
+
+    private static void AddSample(List<UsageSample> samples, string service, string window, CodexWindow quotaWindow, DateTimeOffset timestamp)
+    {
+        if (quotaWindow == null ||
+            !quotaWindow.UsedPercent.HasValue ||
+            !quotaWindow.ResetsAt.HasValue ||
+            !quotaWindow.WindowMinutes.HasValue ||
+            quotaWindow.WindowMinutes.Value <= 0)
+        {
+            return;
+        }
+
+        samples.Add(new UsageSample
+        {
+            Service = service,
+            Window = window,
+            Timestamp = timestamp.ToString("o", CultureInfo.InvariantCulture),
+            UsedPercent = Math.Max(0, Math.Min(100, quotaWindow.UsedPercent.Value)),
+            ResetAt = quotaWindow.ResetsAt.Value.ToString("o", CultureInfo.InvariantCulture),
+            WindowMinutes = quotaWindow.WindowMinutes.Value
+        });
+    }
+}
+
+internal sealed class UsagePaceChartControl : Control
+{
+    private string _title = "Usage pace";
+    private List<UsageSample> _samples = new List<UsageSample>();
+    private DateTimeOffset? _resetAt;
+    private int _windowMinutes;
+    private double? _currentUsedPercent;
+
+    public UsagePaceChartControl()
+    {
+        DoubleBuffered = true;
+        BackColor = Color.FromArgb(248, 249, 250);
+        Dock = DockStyle.Fill;
+        Margin = new Padding(0, 8, 0, 6);
+        MinimumSize = new Size(260, 160);
+        Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point);
+    }
+
+    public void SetData(string title, CodexWindow window, List<UsageSample> samples)
+    {
+        _title = title;
+        _samples = samples ?? new List<UsageSample>();
+        _resetAt = window == null ? null : window.ResetsAt;
+        _windowMinutes = window != null && window.WindowMinutes.HasValue ? window.WindowMinutes.Value : 0;
+        _currentUsedPercent = window == null ? null : window.UsedPercent;
+        if (_currentUsedPercent.HasValue)
+        {
+            var maxReasonableUsed = Math.Min(100, _currentUsedPercent.Value + 5);
+            _samples = _samples
+                .Where(s => s.UsedPercent <= maxReasonableUsed)
+                .ToList();
+        }
+
+        Invalidate();
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        base.OnPaint(e);
+        var g = e.Graphics;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+        g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+
+        var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
+        var plot = new Rectangle(10, 34, Width - 20, Height - 46);
+        var borderColor = Color.FromArgb(214, 219, 226);
+        var gridColor = Color.FromArgb(229, 233, 238);
+        var idealColor = Color.FromArgb(142, 151, 164);
+        var actualColor = Color.FromArgb(37, 120, 214);
+
+        using (var titleFont = new Font(Font, FontStyle.Bold))
+        {
+            TextRenderer.DrawText(
+                g,
+                BuildTitle(),
+                titleFont,
+                new Rectangle(0, 1, Width - 8, 20),
+                Color.FromArgb(48, 54, 64),
+                TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        }
+
+        if (!_resetAt.HasValue || _windowMinutes <= 0)
+        {
+            TextRenderer.DrawText(g, "No pace data yet", Font, plot, Color.FromArgb(92, 98, 108));
+            return;
+        }
+
+        using (var gridPen = new Pen(gridColor))
+        using (var borderPen = new Pen(borderColor))
+        {
+            g.DrawLine(gridPen, plot.Left, plot.Top + plot.Height / 2, plot.Right, plot.Top + plot.Height / 2);
+            g.DrawRectangle(borderPen, plot);
+        }
+
+        var now = DateTimeOffset.Now;
+        var windowStart = _resetAt.Value.AddMinutes(-_windowMinutes);
+        var nowX = Clamp01((now - windowStart).TotalMinutes / _windowMinutes);
+
+        using (var idealPen = new Pen(idealColor, 1.5F))
+        {
+            idealPen.DashStyle = DashStyle.Dash;
+            g.DrawLine(idealPen, PointFor(plot, 0, 0), PointFor(plot, 1, 100));
+        }
+
+        var points = new List<PointF>();
+        foreach (var sample in _samples)
+        {
+            var x = Clamp01((sample.TimestampValue - windowStart).TotalMinutes / _windowMinutes);
+            points.Add(PointFor(plot, x, sample.UsedPercent));
+        }
+        if (_currentUsedPercent.HasValue)
+        {
+            points.Add(PointFor(plot, nowX, _currentUsedPercent.Value));
+        }
+
+        points = points
+            .GroupBy(p => Math.Round(p.X, 1))
+            .Select(gp => gp.Last())
+            .OrderBy(p => p.X)
+            .ToList();
+
+        if (points.Count >= 2)
+        {
+            using (var actualPen = new Pen(actualColor, 2.0F))
+            {
+                g.DrawLines(actualPen, points.ToArray());
+            }
+        }
+        foreach (var point in points.Take(Math.Max(0, points.Count - 12)).Concat(points.Skip(Math.Max(0, points.Count - 12))))
+        {
+            using (var brush = new SolidBrush(actualColor))
+            {
+                g.FillEllipse(brush, point.X - 2, point.Y - 2, 4, 4);
+            }
+        }
+
+        using (var nowPen = new Pen(Color.FromArgb(180, 184, 190), 1F))
+        {
+            g.DrawLine(nowPen, plot.Left + (float)(plot.Width * nowX), plot.Top, plot.Left + (float)(plot.Width * nowX), plot.Bottom);
+        }
+
+        var idealLabel = new Rectangle(plot.Right - 74, plot.Top + 8, 64, 18);
+        using (var labelBack = new SolidBrush(BackColor))
+        {
+            g.FillRectangle(labelBack, idealLabel);
+        }
+
+        TextRenderer.DrawText(
+            g,
+            "ideal",
+            Font,
+            idealLabel,
+            idealColor,
+            TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoClipping);
+    }
+
+    private string BuildTitle()
+    {
+        if (!_resetAt.HasValue || !_currentUsedPercent.HasValue || _windowMinutes <= 0)
+        {
+            return _title;
+        }
+
+        var start = _resetAt.Value.AddMinutes(-_windowMinutes);
+        var elapsed = Math.Max(0, Math.Min(_windowMinutes, (DateTimeOffset.Now - start).TotalMinutes));
+        var idealUsed = elapsed * 100.0 / _windowMinutes;
+        var delta = _currentUsedPercent.Value - idealUsed;
+        var pace = Math.Abs(delta) < 2 ? "on pace" : (delta > 0 ? "fast +" : "slow ") + Math.Abs(delta).ToString("0", CultureInfo.InvariantCulture) + "%";
+        return _title + " - " + pace;
+    }
+
+    private static PointF PointFor(Rectangle plot, double x, double usedPercent)
+    {
+        var px = plot.Left + (float)(plot.Width * Clamp01(x));
+        var py = plot.Bottom - (float)(plot.Height * Math.Max(0, Math.Min(100, usedPercent)) / 100.0);
+        return new PointF(px, py);
+    }
+
+    private static double Clamp01(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            return 0;
+        }
+
+        return Math.Max(0, Math.Min(1, value));
+    }
+}
+
+internal sealed class MainForm : Form
+{
+    private readonly MonitorConfig _config;
+    private readonly System.Windows.Forms.Timer _timer;
+    private readonly QuotaBarControl _codexFiveHour;
+    private readonly QuotaBarControl _codexWeek;
+    private readonly QuotaBarControl _claudeFiveHour;
+    private readonly QuotaBarControl _claudeWeek;
+    private readonly UsagePaceChartControl _codexPaceChart;
+    private readonly UsagePaceChartControl _claudePaceChart;
+    private readonly Label _status;
+    private readonly Button _refreshButton;
+    private readonly CheckBox _topMostCheckBox;
+    private ToolStripMenuItem _topMostMenuItem;
+    private volatile bool _refreshInProgress;
+    private bool _syncingTopMostControl;
+
+    public MainForm()
+    {
+        _config = MonitorConfig.LoadOrCreate();
+
+        Text = "Quota Monitor";
+        ClientSize = new Size(960, 640);
+        MinimumSize = new Size(780, 560);
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MinimizeBox = true;
+        MaximizeBox = true;
+        ShowInTaskbar = true;
+        TopMost = _config.alwaysOnTop;
+        BackColor = Color.FromArgb(248, 249, 250);
+        Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        AutoScaleMode = AutoScaleMode.Dpi;
+        try
+        {
+            Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        }
+        catch
+        {
+        }
+
+        _codexFiveHour = new QuotaBarControl();
+        _codexWeek = new QuotaBarControl();
+        _claudeFiveHour = new QuotaBarControl();
+        _claudeWeek = new QuotaBarControl();
+        _codexPaceChart = new UsagePaceChartControl();
+        _claudePaceChart = new UsagePaceChartControl();
+        _status = new Label();
+        _refreshButton = new Button();
+        _topMostCheckBox = new CheckBox();
+
+        BuildUi();
+        BuildMenu();
+        PlaceWindow();
+
+        _timer = new System.Windows.Forms.Timer();
+        _timer.Interval = Math.Max(3, _config.pollIntervalSeconds) * 1000;
+        _timer.Tick += delegate { RefreshSnapshot(); };
+        Shown += delegate
+        {
+            _codexFiveHour.SetData("5h", "Loading...", null);
+            _codexWeek.SetData("Week", "Loading...", null);
+            _claudeFiveHour.SetData("5h", "Loading...", null);
+            _claudeWeek.SetData("Week", "Loading...", null);
+            _codexPaceChart.SetData("Codex Week pace", null, null);
+            _claudePaceChart.SetData("Claude 7d pace", null, null);
+            RefreshSnapshot();
+            _timer.Start();
+        };
+    }
+
+    private void BuildUi()
+    {
+        var root = new TableLayoutPanel();
+        root.Dock = DockStyle.Fill;
+        root.ColumnCount = 1;
+        root.RowCount = 2;
+        root.Padding = new Padding(10);
+        root.BackColor = BackColor;
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+
+        var columns = new TableLayoutPanel();
+        columns.Dock = DockStyle.Fill;
+        columns.ColumnCount = 2;
+        columns.RowCount = 1;
+        columns.Margin = new Padding(0, 0, 0, 8);
+        columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        columns.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        columns.Controls.Add(BuildServiceColumn("Codex", _codexFiveHour, _codexWeek, _codexPaceChart), 0, 0);
+        columns.Controls.Add(BuildServiceColumn("Claude", _claudeFiveHour, _claudeWeek, _claudePaceChart), 1, 0);
+        root.Controls.Add(columns, 0, 0);
+
+        var bottom = new TableLayoutPanel();
+        bottom.Dock = DockStyle.Fill;
+        bottom.ColumnCount = 3;
+        bottom.RowCount = 1;
+        bottom.Margin = new Padding(0);
+        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 138));
+        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124));
+
+        _refreshButton.Text = "Refresh";
+        _refreshButton.Dock = DockStyle.Fill;
+        _refreshButton.MinimumSize = new Size(108, 30);
+        _refreshButton.Margin = new Padding(8, 4, 0, 2);
+        StyleActionButton(_refreshButton);
+        _refreshButton.Click += delegate { RefreshSnapshot(); };
+
+        _topMostCheckBox.Text = "Topmost";
+        _topMostCheckBox.Dock = DockStyle.Fill;
+        _topMostCheckBox.Checked = _config.alwaysOnTop;
+        _topMostCheckBox.AutoSize = false;
+        _topMostCheckBox.TextAlign = ContentAlignment.MiddleLeft;
+        _topMostCheckBox.ForeColor = Color.FromArgb(52, 58, 66);
+        _topMostCheckBox.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        _topMostCheckBox.Margin = new Padding(8, 5, 0, 0);
+        _topMostCheckBox.CheckedChanged += delegate
+        {
+            if (!_syncingTopMostControl)
+            {
+                SetTopMostEnabled(_topMostCheckBox.Checked, true);
+            }
+        };
+
+        _status.Dock = DockStyle.Fill;
+        _status.ForeColor = Color.FromArgb(90, 96, 106);
+        _status.TextAlign = ContentAlignment.MiddleLeft;
+        _status.AutoEllipsis = true;
+        _status.Margin = new Padding(0, 3, 4, 0);
+        bottom.Controls.Add(_status, 0, 0);
+        bottom.Controls.Add(_topMostCheckBox, 1, 0);
+        bottom.Controls.Add(_refreshButton, 2, 0);
+        root.Controls.Add(bottom, 0, 1);
+
+        Controls.Add(root);
+    }
+
+    private static void StyleActionButton(Button button)
+    {
+        button.FlatStyle = FlatStyle.Flat;
+        button.FlatAppearance.BorderColor = Color.FromArgb(200, 205, 212);
+        button.FlatAppearance.BorderSize = 1;
+        button.BackColor = Color.FromArgb(244, 246, 249);
+        button.ForeColor = Color.FromArgb(35, 41, 48);
+        button.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+    }
+
+    private static Control BuildServiceColumn(string name, QuotaBarControl first, QuotaBarControl second, UsagePaceChartControl chart)
+    {
+        var column = new TableLayoutPanel();
+        column.Dock = DockStyle.Fill;
+        column.ColumnCount = 1;
+        column.RowCount = 5;
+        column.Padding = new Padding(10, 8, 10, 8);
+        column.Margin = new Padding(4);
+        column.BackColor = Color.FromArgb(248, 249, 250);
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 36));
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 246));
+        column.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+
+        var nameLabel = new Label();
+        nameLabel.Text = name;
+        nameLabel.Dock = DockStyle.Fill;
+        nameLabel.Font = new Font("Segoe UI", 12F, FontStyle.Bold, GraphicsUnit.Point);
+        nameLabel.ForeColor = Color.FromArgb(30, 34, 40);
+        nameLabel.TextAlign = ContentAlignment.MiddleLeft;
+        nameLabel.AutoSize = false;
+        nameLabel.AutoEllipsis = true;
+
+        first.Dock = DockStyle.Fill;
+        second.Dock = DockStyle.Fill;
+        chart.Dock = DockStyle.Fill;
+        first.Margin = new Padding(0, 0, 0, 2);
+        second.Margin = new Padding(0, 2, 0, 0);
+        chart.Margin = new Padding(0, 12, 0, 0);
+
+        column.Controls.Add(nameLabel, 0, 0);
+        column.Controls.Add(first, 0, 1);
+        column.Controls.Add(second, 0, 2);
+        column.Controls.Add(chart, 0, 3);
+        return column;
+    }
+
+    private void BuildMenu()
+    {
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Refresh", null, delegate { RefreshSnapshot(); });
+        menu.Items.Add("Minimize", null, delegate { WindowState = FormWindowState.Minimized; });
+        _topMostMenuItem = new ToolStripMenuItem("Topmost");
+        _topMostMenuItem.Checked = _config.alwaysOnTop;
+        _topMostMenuItem.CheckOnClick = true;
+        _topMostMenuItem.CheckedChanged += delegate
+        {
+            if (!_syncingTopMostControl)
+            {
+                SetTopMostEnabled(_topMostMenuItem.Checked, true);
+            }
+        };
+        menu.Items.Add(_topMostMenuItem);
+        menu.Items.Add("Open config", null, delegate { Process.Start(MonitorConfig.ConfigPath); });
+        menu.Items.Add("Exit", null, delegate { Close(); });
+        ContextMenuStrip = menu;
+    }
+
+    private void SetTopMostEnabled(bool enabled, bool persist)
+    {
+        _config.alwaysOnTop = enabled;
+        TopMost = enabled;
+        _syncingTopMostControl = true;
+        try
+        {
+            _topMostCheckBox.Checked = enabled;
+            if (_topMostMenuItem != null)
+            {
+                _topMostMenuItem.Checked = enabled;
+            }
+        }
+        finally
+        {
+            _syncingTopMostControl = false;
+        }
+
+        if (persist)
+        {
+            try
+            {
+                _config.Save();
+            }
+            catch (Exception ex)
+            {
+                AppLog.Write("save config error: " + ex);
+            }
+        }
+
+        if (enabled)
+        {
+            Activate();
+        }
+    }
+
+    private void PlaceWindow()
+    {
+        if (!_config.startAtTopRight)
+        {
+            StartPosition = FormStartPosition.CenterScreen;
+            return;
+        }
+
+        StartPosition = FormStartPosition.Manual;
+        var area = Screen.PrimaryScreen.WorkingArea;
+        Location = new Point(area.Right - Width - 16, area.Top + 16);
+    }
+
+    private void RefreshSnapshot()
+    {
+        if (_refreshInProgress)
+        {
+            return;
+        }
+
+        _refreshInProgress = true;
+        _refreshButton.Enabled = false;
+        _status.Text = "Loading...";
+        AppLog.Write("refresh begin");
+
+        ThreadPool.QueueUserWorkItem(delegate
+        {
+            QuotaSnapshot snapshot = null;
+            Exception error = null;
+            try
+            {
+                snapshot = QuotaReader.Read(_config);
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+                AppLog.Write("refresh error: " + ex);
+            }
+
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            BeginInvoke((MethodInvoker)delegate
+            {
+                try
+                {
+                    TopMost = _config.alwaysOnTop;
+
+                    if (error != null)
+                    {
+                        _status.Text = error.Message;
+                    }
+                    else
+                    {
+                        UsageHistoryStore.AppendSnapshot(snapshot);
+                        RenderCodex(snapshot.Codex);
+                        RenderClaude(snapshot.Claude);
+                        RenderPaceCharts(snapshot);
+                        _status.Text = string.Format(
+                            CultureInfo.InvariantCulture,
+                            "Updated {0:HH:mm:ss}",
+                            snapshot.UpdatedAt.LocalDateTime);
+                        AppLog.Write("refresh ok");
+                    }
+                }
+                finally
+                {
+                    _refreshInProgress = false;
+                    _refreshButton.Enabled = true;
+                }
+            });
+        });
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        try
+        {
+            _timer.Stop();
+            _timer.Dispose();
+        }
+        catch
+        {
+        }
+
+        base.OnFormClosed(e);
+    }
+
+    private void RenderCodex(CodexSnapshot codex)
+    {
+        if (!codex.Available)
+        {
+            _codexFiveHour.SetData("5h", "No data: " + (codex.Error ?? ""), null);
+            _codexWeek.SetData("Week", "No data", null);
+            return;
+        }
+
+        _codexFiveHour.SetData(
+            FormatCodexRemaining(codex.Primary, "5h"),
+            "reset " + FormatReset(codex.Primary == null ? null : codex.Primary.ResetsAt) +
+            " | used " + FormatUsedPercent(codex.Primary),
+            codex.Primary == null ? null : codex.Primary.RemainingPercent);
+
+        _codexWeek.SetData(
+            FormatCodexRemaining(codex.Secondary, "Week"),
+            "reset " + FormatReset(codex.Secondary == null ? null : codex.Secondary.ResetsAt) +
+            " | used " + FormatUsedPercent(codex.Secondary),
+            codex.Secondary == null ? null : codex.Secondary.RemainingPercent);
+    }
+
+    private void RenderClaude(ClaudeSnapshot claude)
+    {
+        if (!claude.Available)
+        {
+            _claudeFiveHour.SetData("5h estimate", "No data: " + (claude.Error ?? ""), null);
+            _claudeWeek.SetData("7d estimate", "No data", null);
+            return;
+        }
+
+        if (claude.RealtimeFiveHour != null || claude.RealtimeWeek != null)
+        {
+            _claudeFiveHour.SetData(
+                FormatCodexRemaining(claude.RealtimeFiveHour, "5h"),
+                "reset " + FormatReset(claude.RealtimeFiveHour == null ? null : claude.RealtimeFiveHour.ResetsAt) +
+                " | used " + FormatUsedPercent(claude.RealtimeFiveHour),
+                claude.RealtimeFiveHour == null ? null : claude.RealtimeFiveHour.RemainingPercent);
+
+            _claudeWeek.SetData(
+                FormatCodexRemaining(claude.RealtimeWeek, "7d"),
+                "reset " + FormatReset(claude.RealtimeWeek == null ? null : claude.RealtimeWeek.ResetsAt) +
+                " | used " + FormatUsedPercent(claude.RealtimeWeek),
+                claude.RealtimeWeek == null ? null : claude.RealtimeWeek.RemainingPercent);
+            return;
+        }
+        else if (claude.TokenBudget > 0)
+        {
+            _claudeFiveHour.SetData(
+                "5h est. left " + FormatTokens(claude.RemainingTokens.Value),
+                "used " + claude.MessageCount + " msg, " + FormatTokens(claude.WeightedTokens) +
+                " | reset~ " + FormatReset(claude.EstimatedResetAt),
+                claude.RemainingTokenPercent);
+        }
+        else if (claude.MessageBudget > 0)
+        {
+            _claudeFiveHour.SetData(
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "5h est. left {0}/{1} msg",
+                    claude.RemainingMessages.Value,
+                    claude.MessageBudget),
+                "used " + claude.MessageCount + " msg, " + FormatTokens(claude.WeightedTokens) +
+                " | reset~ " + FormatReset(claude.EstimatedResetAt),
+                claude.RemainingMessagePercent);
+        }
+        else
+        {
+            _claudeFiveHour.SetData(
+                "5h local usage",
+                "used " + claude.MessageCount + " msg, " + FormatTokens(claude.WeightedTokens),
+                null);
+        }
+
+        if (claude.WeeklyTokenBudget > 0)
+        {
+            _claudeWeek.SetData(
+                "Week est. left " + FormatTokens(claude.WeeklyRemainingTokens.Value),
+                "used " + claude.WeeklyMessageCount + " msg, " + FormatTokens(claude.WeeklyWeightedTokens) +
+                " | reset~ " + FormatReset(claude.EstimatedWeeklyResetAt),
+                claude.WeeklyRemainingTokenPercent);
+        }
+        else if (claude.WeeklyMessageBudget > 0)
+        {
+            _claudeWeek.SetData(
+                string.Format(
+                    CultureInfo.InvariantCulture,
+                    "Week est. left {0}/{1} msg",
+                    claude.WeeklyRemainingMessages.Value,
+                    claude.WeeklyMessageBudget),
+                "used " + claude.WeeklyMessageCount + " msg, " + FormatTokens(claude.WeeklyWeightedTokens) +
+                " | reset~ " + FormatReset(claude.EstimatedWeeklyResetAt),
+                claude.WeeklyRemainingMessagePercent);
+        }
+        else
+        {
+            _claudeWeek.SetData(
+                "7d local usage",
+                "used " + claude.WeeklyMessageCount + " msg, " + FormatTokens(claude.WeeklyWeightedTokens),
+                null);
+        }
+    }
+
+    private void RenderPaceCharts(QuotaSnapshot snapshot)
+    {
+        var codexSamples = snapshot.Codex.Secondary != null && snapshot.Codex.Secondary.ResetsAt.HasValue
+            ? UsageHistoryStore.Load("Codex", "Week", snapshot.Codex.Secondary.ResetsAt.Value)
+            : new List<UsageSample>();
+        _codexPaceChart.SetData("Codex Week pace", snapshot.Codex.Secondary, codexSamples);
+
+        var claudeSamples = snapshot.Claude.RealtimeWeek != null && snapshot.Claude.RealtimeWeek.ResetsAt.HasValue
+            ? UsageHistoryStore.Load("Claude", "7d", snapshot.Claude.RealtimeWeek.ResetsAt.Value)
+            : new List<UsageSample>();
+        _claudePaceChart.SetData("Claude 7d pace", snapshot.Claude.RealtimeWeek, claudeSamples);
+    }
+
+    private static string FormatCodexRemaining(CodexWindow window, string label)
+    {
+        if (window == null || !window.RemainingPercent.HasValue)
+        {
+            return label + " --";
+        }
+
+        return string.Format(CultureInfo.InvariantCulture, "{0} left {1:0}%", label, window.RemainingPercent.Value);
+    }
+
+    private static string FormatUsedPercent(CodexWindow window)
+    {
+        if (window == null || !window.UsedPercent.HasValue)
+        {
+            return "--";
+        }
+
+        return string.Format(CultureInfo.InvariantCulture, "{0:0}%", window.UsedPercent.Value);
+    }
+
+    private static string FormatReset(DateTimeOffset? resetAt)
+    {
+        if (!resetAt.HasValue)
+        {
+            return "--";
+        }
+
+        var remaining = resetAt.Value - DateTimeOffset.Now;
+        if (remaining.TotalSeconds < 0)
+        {
+            return "soon";
+        }
+
+        return string.Format(
+            CultureInfo.InvariantCulture,
+            "{0:HH:mm} ({1})",
+            resetAt.Value.LocalDateTime,
+            FormatDuration(remaining));
+    }
+
+    private static string FormatDuration(TimeSpan duration)
+    {
+        if (duration.TotalDays >= 1)
+        {
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "{0}d {1}h",
+                (int)duration.TotalDays,
+                duration.Hours);
+        }
+        if (duration.TotalHours >= 1)
+        {
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "{0}h {1}m",
+                (int)duration.TotalHours,
+                duration.Minutes);
+        }
+
+        return string.Format(CultureInfo.InvariantCulture, "{0}m", Math.Max(0, (int)duration.TotalMinutes));
+    }
+
+    private static string FormatTokens(long tokens)
+    {
+        var abs = Math.Abs(tokens);
+        if (abs >= 1000000)
+        {
+            return string.Format(CultureInfo.InvariantCulture, "{0:0.0}M tok", tokens / 1000000.0);
+        }
+        if (abs >= 1000)
+        {
+            return string.Format(CultureInfo.InvariantCulture, "{0:0.0}K tok", tokens / 1000.0);
+        }
+
+        return tokens + " tok";
+    }
+
+    private static Color PickColor(double? remainingPercent)
+    {
+        if (!remainingPercent.HasValue)
+        {
+            return Color.FromArgb(19, 94, 191);
+        }
+        if (remainingPercent.Value <= 10)
+        {
+            return Color.FromArgb(190, 55, 45);
+        }
+        if (remainingPercent.Value <= 25)
+        {
+            return Color.FromArgb(180, 118, 20);
+        }
+
+        return Color.FromArgb(19, 94, 191);
+    }
+}
+
+internal static class Json
+{
+    public static JavaScriptSerializer NewSerializer()
+    {
+        return new JavaScriptSerializer
+        {
+            MaxJsonLength = int.MaxValue,
+            RecursionLimit = 512
+        };
+    }
+
+    public static Dictionary<string, object> ParseObject(string line)
+    {
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            return null;
+        }
+
+        try
+        {
+            return Dict(NewSerializer().DeserializeObject(line));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static object Value(Dictionary<string, object> dict, string name)
+    {
+        object value;
+        return dict != null && dict.TryGetValue(name, out value) ? value : null;
+    }
+
+    public static Dictionary<string, object> Dict(object value)
+    {
+        return value as Dictionary<string, object>;
+    }
+
+    public static string String(Dictionary<string, object> dict, string name)
+    {
+        var value = Value(dict, name);
+        return value == null ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
+    }
+
+    public static long? Long(Dictionary<string, object> dict, string name)
+    {
+        var value = Value(dict, name);
+        if (value == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return Convert.ToInt64(value, CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static int? Int(Dictionary<string, object> dict, string name)
+    {
+        var value = Long(dict, name);
+        return value.HasValue ? (int)value.Value : (int?)null;
+    }
+
+    public static double? Double(Dictionary<string, object> dict, string name)
+    {
+        var value = Value(dict, name);
+        if (value == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return Convert.ToDouble(value, CultureInfo.InvariantCulture);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static DateTimeOffset? Date(Dictionary<string, object> dict, string name)
+    {
+        var text = String(dict, name);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        DateTimeOffset parsed;
+        if (!DateTimeOffset.TryParse(
+                text,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out parsed))
+        {
+            return null;
+        }
+
+        return parsed.ToLocalTime();
+    }
+
+    public static DateTimeOffset? UnixSeconds(Dictionary<string, object> dict, string name)
+    {
+        var seconds = Long(dict, name);
+        if (!seconds.HasValue)
+        {
+            return null;
+        }
+
+        return DateTimeOffset.FromUnixTimeSeconds(seconds.Value).ToLocalTime();
+    }
+
+    public static DateTimeOffset? FlexibleDate(object value)
+    {
+        if (value == null)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (value is string)
+            {
+                var text = Convert.ToString(value, CultureInfo.InvariantCulture);
+                long numeric;
+                if (long.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out numeric))
+                {
+                    return UnixTimestampToLocal(numeric);
+                }
+
+                DateTimeOffset parsed;
+                if (DateTimeOffset.TryParse(
+                        text,
+                        CultureInfo.InvariantCulture,
+                        DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                        out parsed))
+                {
+                    return parsed.ToLocalTime();
+                }
+
+                return null;
+            }
+
+            return UnixTimestampToLocal(Convert.ToInt64(value, CultureInfo.InvariantCulture));
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static DateTimeOffset? UnixTimestampToLocal(long value)
+    {
+        if (value <= 0)
+        {
+            return null;
+        }
+
+        if (value > 100000000000L)
+        {
+            return DateTimeOffset.FromUnixTimeMilliseconds(value).ToLocalTime();
+        }
+
+        return DateTimeOffset.FromUnixTimeSeconds(value).ToLocalTime();
+    }
+}
+
+internal static class Http
+{
+    public static Dictionary<string, object> GetJson(
+        string url,
+        string bearerToken,
+        Dictionary<string, string> extraHeaders,
+        int timeoutMs)
+    {
+        ServicePointManager.SecurityProtocol =
+            SecurityProtocolType.Tls12;
+        ServicePointManager.Expect100Continue = false;
+
+        var request = (HttpWebRequest)WebRequest.Create(url);
+        request.Method = "GET";
+        request.Accept = "application/json, text/plain, */*";
+        request.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) QuotaMonitor/1.0";
+        request.Timeout = timeoutMs;
+        request.ReadWriteTimeout = timeoutMs;
+        request.KeepAlive = false;
+        request.Pipelined = false;
+        request.ProtocolVersion = HttpVersion.Version11;
+        request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+        request.Headers[HttpRequestHeader.Authorization] = "Bearer " + bearerToken;
+        request.Headers[HttpRequestHeader.CacheControl] = "no-cache";
+
+        if (extraHeaders != null)
+        {
+            foreach (var header in extraHeaders)
+            {
+                if (string.Equals(header.Key, "Accept", StringComparison.OrdinalIgnoreCase))
+                {
+                    request.Accept = header.Value;
+                }
+                else if (string.Equals(header.Key, "User-Agent", StringComparison.OrdinalIgnoreCase))
+                {
+                    request.UserAgent = header.Value;
+                }
+                else if (string.Equals(header.Key, "Referer", StringComparison.OrdinalIgnoreCase))
+                {
+                    request.Referer = header.Value;
+                }
+                else
+                {
+                    request.Headers[header.Key] = header.Value;
+                }
+            }
+        }
+
+        using (var response = (HttpWebResponse)request.GetResponse())
+        using (var stream = response.GetResponseStream())
+        using (var reader = new StreamReader(stream))
+        {
+            return Json.ParseObject(reader.ReadToEnd());
+        }
+    }
+}
+
+internal static class SharedFile
+{
+    public static List<string> ReadAllLines(string path)
+    {
+        using (var stream = new FileStream(
+                   path,
+                   FileMode.Open,
+                   FileAccess.Read,
+                   FileShare.ReadWrite | FileShare.Delete))
+        using (var reader = new StreamReader(stream))
+        {
+            var lines = new List<string>();
+            while (!reader.EndOfStream)
+            {
+                lines.Add(reader.ReadLine());
+            }
+
+            return lines;
+        }
+    }
+}
+
+internal static class SelfTest
+{
+    public static void Write(QuotaSnapshot snapshot)
+    {
+        var path = Path.Combine(MonitorConfig.AppDir, "quota-monitor.snapshot.txt");
+        var lines = new[]
+        {
+            "updatedAt=" + snapshot.UpdatedAt.ToString("o", CultureInfo.InvariantCulture),
+            "codex.available=" + snapshot.Codex.Available,
+            "codex.source=" + snapshot.Codex.Source,
+            "codex.fallbackError=" + Sanitize(snapshot.Codex.FallbackError),
+            "codex.primaryRemaining=" + NullableDouble(snapshot.Codex.Primary == null ? null : snapshot.Codex.Primary.RemainingPercent),
+            "codex.secondaryRemaining=" + NullableDouble(snapshot.Codex.Secondary == null ? null : snapshot.Codex.Secondary.RemainingPercent),
+            "codex.totalTokens=" + snapshot.Codex.TotalTokens,
+            "claude.available=" + snapshot.Claude.Available,
+            "claude.source=" + snapshot.Claude.Source,
+            "claude.fallbackError=" + Sanitize(snapshot.Claude.FallbackError),
+            "claude.realtimeFiveHourRemaining=" + NullableDouble(snapshot.Claude.RealtimeFiveHour == null ? null : snapshot.Claude.RealtimeFiveHour.RemainingPercent),
+            "claude.realtimeWeekRemaining=" + NullableDouble(snapshot.Claude.RealtimeWeek == null ? null : snapshot.Claude.RealtimeWeek.RemainingPercent),
+            "claude.messageCount=" + snapshot.Claude.MessageCount,
+            "claude.remainingMessages=" + NullableInt(snapshot.Claude.RemainingMessages),
+            "claude.weightedTokens=" + snapshot.Claude.WeightedTokens,
+            "claude.weeklyMessageCount=" + snapshot.Claude.WeeklyMessageCount,
+            "claude.weeklyRemainingMessages=" + NullableInt(snapshot.Claude.WeeklyRemainingMessages),
+            "claude.weeklyWeightedTokens=" + snapshot.Claude.WeeklyWeightedTokens
+        };
+        File.WriteAllLines(path, lines);
+    }
+
+    private static string NullableDouble(double? value)
+    {
+        return value.HasValue ? value.Value.ToString("0.##", CultureInfo.InvariantCulture) : "";
+    }
+
+    private static string NullableInt(int? value)
+    {
+        return value.HasValue ? value.Value.ToString(CultureInfo.InvariantCulture) : "";
+    }
+
+    private static string Sanitize(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "";
+        }
+
+        return value.Replace("\r", " ").Replace("\n", " ");
+    }
+}
+
+internal sealed class QuotaSnapshot
+{
+    public DateTimeOffset UpdatedAt;
+    public CodexSnapshot Codex;
+    public ClaudeSnapshot Claude;
+}
+
+internal sealed class CodexSnapshot
+{
+    public bool Available;
+    public string Error;
+    public string Source;
+    public string FallbackError;
+    public DateTimeOffset Timestamp;
+    public string PlanType;
+    public string LimitId;
+    public string RateLimitReachedType;
+    public CodexWindow Primary;
+    public CodexWindow Secondary;
+    public long TotalTokens;
+    public long LastTurnTokens;
+
+    public static CodexSnapshot Missing(string error)
+    {
+        return new CodexSnapshot
+        {
+            Available = false,
+            Error = error,
+            Source = "none",
+            Timestamp = DateTimeOffset.Now
+        };
+    }
+}
+
+internal sealed class CodexWindow
+{
+    public double? UsedPercent;
+    public double? RemainingPercent;
+    public DateTimeOffset? ResetsAt;
+    public int? WindowMinutes;
+}
+
+internal sealed class ClaudeSnapshot
+{
+    public bool Available;
+    public string Error;
+    public string Source;
+    public string FallbackError;
+    public int WindowMinutes;
+    public int WeekWindowMinutes;
+    public int MessageBudget;
+    public long TokenBudget;
+    public int WeeklyMessageBudget;
+    public long WeeklyTokenBudget;
+    public int MessageCount;
+    public long InputTokens;
+    public long OutputTokens;
+    public long CacheCreationTokens;
+    public long CacheReadTokens;
+    public long WeightedTokens;
+    public int WeeklyMessageCount;
+    public long WeeklyInputTokens;
+    public long WeeklyOutputTokens;
+    public long WeeklyCacheCreationTokens;
+    public long WeeklyCacheReadTokens;
+    public long WeeklyWeightedTokens;
+    public DateTimeOffset? OldestCountedAt;
+    public DateTimeOffset? OldestWeeklyCountedAt;
+    public DateTimeOffset? EstimatedResetAt;
+    public DateTimeOffset? EstimatedWeeklyResetAt;
+    public CodexWindow RealtimeFiveHour;
+    public CodexWindow RealtimeWeek;
+    public readonly HashSet<string> Models = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    public int? RemainingMessages
+    {
+        get { return MessageBudget <= 0 ? (int?)null : Math.Max(0, MessageBudget - MessageCount); }
+    }
+
+    public long? RemainingTokens
+    {
+        get { return TokenBudget <= 0 ? (long?)null : Math.Max(0, TokenBudget - WeightedTokens); }
+    }
+
+    public int? WeeklyRemainingMessages
+    {
+        get { return WeeklyMessageBudget <= 0 ? (int?)null : Math.Max(0, WeeklyMessageBudget - WeeklyMessageCount); }
+    }
+
+    public long? WeeklyRemainingTokens
+    {
+        get { return WeeklyTokenBudget <= 0 ? (long?)null : Math.Max(0, WeeklyTokenBudget - WeeklyWeightedTokens); }
+    }
+
+    public double? RemainingTokenPercent
+    {
+        get
+        {
+            if (TokenBudget <= 0)
+            {
+                return null;
+            }
+
+            return Math.Max(0, Math.Min(100, (TokenBudget - WeightedTokens) * 100.0 / TokenBudget));
+        }
+    }
+
+    public double? WeeklyRemainingTokenPercent
+    {
+        get
+        {
+            if (WeeklyTokenBudget <= 0)
+            {
+                return null;
+            }
+
+            return Math.Max(0, Math.Min(100, (WeeklyTokenBudget - WeeklyWeightedTokens) * 100.0 / WeeklyTokenBudget));
+        }
+    }
+
+    public double? RemainingMessagePercent
+    {
+        get
+        {
+            if (MessageBudget <= 0 || !RemainingMessages.HasValue)
+            {
+                return null;
+            }
+
+            return Math.Max(0, Math.Min(100, RemainingMessages.Value * 100.0 / MessageBudget));
+        }
+    }
+
+    public double? WeeklyRemainingMessagePercent
+    {
+        get
+        {
+            if (WeeklyMessageBudget <= 0 || !WeeklyRemainingMessages.HasValue)
+            {
+                return null;
+            }
+
+            return Math.Max(0, Math.Min(100, WeeklyRemainingMessages.Value * 100.0 / WeeklyMessageBudget));
+        }
+    }
+
+    public static ClaudeSnapshot Missing(string error)
+    {
+        return new ClaudeSnapshot
+        {
+            Available = false,
+            Source = "none",
+            Error = error
+        };
+    }
+}

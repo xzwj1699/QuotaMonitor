@@ -1,0 +1,19 @@
+{
+  "pollIntervalSeconds": 300,
+  "alwaysOnTop": true,
+  "startAtTopRight": true,
+  "codexSessionsPath": "%USERPROFILE%\\.codex\\sessions",
+  "codexAuthPath": "%USERPROFILE%\\.codex\\auth.json",
+  "claudeProjectsPath": "%USERPROFILE%\\.claude\\projects",
+  "claudeCredentialsPath": "%USERPROFILE%\\.claude\\.credentials.json",
+  "useRealtimeApi": true,
+  "realtimeApiTimeoutSeconds": 15,
+  "claudeWindowMinutes": 300,
+  "claudeWeekWindowMinutes": 10080,
+  "claudeFiveHourMessageBudget": 45,
+  "claudeFiveHourTokenBudget": 0,
+  "claudeWeeklyMessageBudget": 0,
+  "claudeWeeklyTokenBudget": 0,
+  "claudeCacheReadWeight": 0.1,
+  "claudeIncludeNonClaudeModels": false
+}

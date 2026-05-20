@@ -1,0 +1,8 @@
+quota-monitor.config.json
+quota-monitor.log
+quota-monitor.snapshot.txt
+quota-monitor-history.jsonl
+bin/
+obj/
+.vs/
+*.user
