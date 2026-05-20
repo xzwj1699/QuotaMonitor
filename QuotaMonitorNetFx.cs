@@ -1269,15 +1269,11 @@ internal static class UsageHistoryStore
             buckets[AddPeriods(firstBucket, aggregation, i)] = 0;
         }
 
+        var cleanedSamples = CleanSamplesForHistory(samples);
         UsageSample previous = null;
-        for (var i = 0; i < samples.Count; i++)
+        for (var i = 0; i < cleanedSamples.Count; i++)
         {
-            var current = samples[i];
-            if (IsSpuriousPeak(samples, i))
-            {
-                continue;
-            }
-
+            var current = cleanedSamples[i];
             if (previous != null)
             {
                 var sameWindow = Math.Abs((current.ResetAtValue - previous.ResetAtValue).TotalMinutes) <= 2;
@@ -1312,24 +1308,48 @@ internal static class UsageHistoryStore
         return result;
     }
 
-    private static bool IsSpuriousPeak(List<UsageSample> samples, int index)
+    private static List<UsageSample> CleanSamplesForHistory(List<UsageSample> samples)
     {
-        if (index <= 0 || index >= samples.Count - 1)
+        var cleaned = new List<UsageSample>();
+        foreach (var sample in samples)
+        {
+            if (cleaned.Count > 0 && IsTemporaryHighJump(cleaned.Last(), sample, samples))
+            {
+                continue;
+            }
+
+            cleaned.Add(sample);
+        }
+
+        return cleaned;
+    }
+
+    private static bool IsTemporaryHighJump(UsageSample previous, UsageSample current, List<UsageSample> allSamples)
+    {
+        var sameWindow = Math.Abs((current.ResetAtValue - previous.ResetAtValue).TotalMinutes) <= 2;
+        var jump = current.UsedPercent - previous.UsedPercent;
+        if (!sameWindow || current.UsedPercent < 90 || jump < 40)
         {
             return false;
         }
 
-        var previous = samples[index - 1];
-        var current = samples[index];
-        var next = samples[index + 1];
-        var samePreviousWindow = Math.Abs((current.ResetAtValue - previous.ResetAtValue).TotalMinutes) <= 2;
-        var sameNextWindow = Math.Abs((next.ResetAtValue - current.ResetAtValue).TotalMinutes) <= 2;
-        return samePreviousWindow &&
-            sameNextWindow &&
-            current.UsedPercent >= 99 &&
-            previous.UsedPercent <= 60 &&
-            next.UsedPercent <= 60 &&
-            current.UsedPercent - Math.Max(previous.UsedPercent, next.UsedPercent) >= 30;
+        foreach (var future in allSamples)
+        {
+            if (future.TimestampValue <= current.TimestampValue)
+            {
+                continue;
+            }
+            if (Math.Abs((future.ResetAtValue - current.ResetAtValue).TotalMinutes) > 2)
+            {
+                break;
+            }
+            if (future.UsedPercent <= previous.UsedPercent + 10)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static DateTime BucketStart(DateTime value, HistoryAggregation aggregation)
@@ -2040,11 +2060,9 @@ internal sealed class MainForm : Form
         root.RowCount = 3;
         root.Padding = new Padding(10);
         root.BackColor = BackColor;
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
-
-        root.Controls.Add(BuildChartToolbar(), 0, 0);
 
         _columns = new TableLayoutPanel();
         _columns.Dock = DockStyle.Fill;
@@ -2053,7 +2071,8 @@ internal sealed class MainForm : Form
         _codexColumn = BuildServiceColumn("Codex", _codexPlanLabel, _codexFiveHour, _codexWeek, _codexPaceChart, _codexHistoryChart);
         _claudeColumn = BuildServiceColumn("Claude", _claudePlanLabel, _claudeFiveHour, _claudeWeek, _claudePaceChart, _claudeHistoryChart);
         ApplyServiceVisibility(false);
-        root.Controls.Add(_columns, 0, 1);
+        root.Controls.Add(_columns, 0, 0);
+        root.Controls.Add(BuildChartToolbar(), 0, 1);
 
         var bottom = new TableLayoutPanel();
         bottom.Dock = DockStyle.Fill;
@@ -2108,7 +2127,8 @@ internal sealed class MainForm : Form
         toolbar.FlowDirection = FlowDirection.LeftToRight;
         toolbar.WrapContents = false;
         toolbar.BackColor = BackColor;
-        toolbar.Margin = new Padding(4, 0, 4, 4);
+        toolbar.Margin = new Padding(4, 6, 4, 4);
+        toolbar.Padding = new Padding(0);
 
         ConfigureToggleButton(_paceModeButton, "Pace", 76);
         _paceModeButton.Click += delegate
@@ -2145,8 +2165,11 @@ internal sealed class MainForm : Form
     private static void ConfigureToggleButton(Button button, string text, int width)
     {
         button.Text = text;
-        button.Size = new Size(width, 26);
+        button.Size = new Size(width, 32);
+        button.MinimumSize = new Size(width, 32);
         button.Margin = new Padding(0, 2, 8, 2);
+        button.Padding = new Padding(0);
+        button.TextAlign = ContentAlignment.MiddleCenter;
         button.FlatStyle = FlatStyle.Flat;
         button.FlatAppearance.BorderSize = 1;
         button.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point);
