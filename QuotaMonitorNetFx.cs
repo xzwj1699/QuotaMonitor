@@ -1681,7 +1681,22 @@ internal sealed class UsagePaceChartControl : Control
         var elapsed = Math.Max(0, Math.Min(_windowMinutes, (DateTimeOffset.Now - start).TotalMinutes));
         var idealUsed = elapsed * 100.0 / _windowMinutes;
         var delta = _currentUsedPercent.Value - idealUsed;
-        var pace = Math.Abs(delta) < 2 ? "on pace" : (delta > 0 ? "fast +" : "slow ") + Math.Abs(delta).ToString("0", CultureInfo.InvariantCulture) + "%";
+        var deltaText = (delta >= 0 ? "+" : "-") + Math.Abs(delta).ToString("0", CultureInfo.InvariantCulture) + "pp";
+        string pace;
+        if (Math.Abs(delta) < 2)
+        {
+            pace = "on pace (" + deltaText + ")";
+        }
+        else if (idealUsed >= 1)
+        {
+            var ratio = _currentUsedPercent.Value / idealUsed;
+            pace = (delta > 0 ? "fast " : "slow ") + ratio.ToString("0.0", CultureInfo.InvariantCulture) + "x (" + deltaText + ")";
+        }
+        else
+        {
+            pace = (delta > 0 ? "ahead " : "behind ") + deltaText;
+        }
+
         return _title + " - " + pace;
     }
 
