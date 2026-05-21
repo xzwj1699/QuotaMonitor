@@ -2061,7 +2061,7 @@ internal sealed class SettingsForm : Form
         MinimizeBox = false;
         MaximizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(430, 480);
+        ClientSize = new Size(540, 540);
         BackColor = Color.FromArgb(248, 249, 250);
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -2095,8 +2095,8 @@ internal sealed class SettingsForm : Form
         root.ColumnCount = 2;
         root.Padding = new Padding(18, 16, 18, 14);
         root.BackColor = BackColor;
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
         AddSection(root, "Display");
         AddCheck(root, _showCodex, "Show Codex");
@@ -2124,19 +2124,19 @@ internal sealed class SettingsForm : Form
         var okButton = new Button();
         okButton.Text = "OK";
         okButton.DialogResult = DialogResult.OK;
-        okButton.Size = new Size(92, 32);
+        okButton.Size = new Size(98, 34);
         StyleDialogButton(okButton, true);
 
         var cancelButton = new Button();
         cancelButton.Text = "Cancel";
         cancelButton.DialogResult = DialogResult.Cancel;
-        cancelButton.Size = new Size(92, 32);
+        cancelButton.Size = new Size(98, 34);
         cancelButton.Margin = new Padding(8, 0, 0, 0);
         StyleDialogButton(cancelButton, false);
 
         buttons.Controls.Add(okButton);
         buttons.Controls.Add(cancelButton);
-        AddFullWidth(root, buttons, 44);
+        AddFullWidth(root, buttons, 50);
 
         AcceptButton = okButton;
         CancelButton = cancelButton;
@@ -2186,9 +2186,9 @@ internal sealed class SettingsForm : Form
         number.DecimalPlaces = decimalPlaces;
         number.Increment = decimalPlaces == 0 ? 1 : 0.5M;
         number.Dock = DockStyle.Left;
-        number.Width = 110;
+        number.Width = 124;
         number.TextAlign = HorizontalAlignment.Right;
-        number.Margin = new Padding(0, 2, 0, 2);
+        number.Margin = new Padding(0, 3, 0, 3);
         return number;
     }
 
@@ -2200,8 +2200,8 @@ internal sealed class SettingsForm : Form
         label.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold, GraphicsUnit.Point);
         label.ForeColor = Color.FromArgb(24, 31, 40);
         label.TextAlign = ContentAlignment.BottomLeft;
-        label.Margin = new Padding(0, 8, 0, 2);
-        AddFullWidth(root, label, 30);
+        label.Margin = new Padding(0, 8, 0, 3);
+        AddFullWidth(root, label, 36);
     }
 
     private static void AddCheck(TableLayoutPanel root, CheckBox checkBox, string text)
@@ -2210,20 +2210,20 @@ internal sealed class SettingsForm : Form
         checkBox.Dock = DockStyle.Fill;
         checkBox.AutoSize = false;
         checkBox.TextAlign = ContentAlignment.MiddleLeft;
-        checkBox.Margin = new Padding(0, 2, 0, 2);
+        checkBox.Margin = new Padding(0, 3, 0, 3);
         checkBox.ForeColor = Color.FromArgb(45, 52, 62);
-        AddFullWidth(root, checkBox, 28);
+        AddFullWidth(root, checkBox, 34);
     }
 
     private static void AddNumber(TableLayoutPanel root, string text, NumericUpDown number)
     {
-        var row = AddRow(root, 30);
+        var row = AddRow(root, 36);
         var label = new Label();
         label.Text = text;
         label.Dock = DockStyle.Fill;
         label.TextAlign = ContentAlignment.MiddleLeft;
         label.ForeColor = Color.FromArgb(45, 52, 62);
-        label.Margin = new Padding(0, 2, 10, 2);
+        label.Margin = new Padding(0, 3, 10, 3);
         root.Controls.Add(label, 0, row);
         root.Controls.Add(number, 1, row);
     }
