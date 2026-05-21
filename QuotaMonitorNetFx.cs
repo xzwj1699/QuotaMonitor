@@ -2352,27 +2352,34 @@ internal sealed class SettingsForm : Form
         AddNumber(root, "5h remaining threshold (%)", _fiveHourThreshold);
         AddNumber(root, "Week/7d remaining threshold (%)", _longWindowThreshold);
 
-        var buttons = new FlowLayoutPanel();
-        buttons.FlowDirection = FlowDirection.RightToLeft;
+        var buttons = new TableLayoutPanel();
         buttons.Dock = DockStyle.Fill;
-        buttons.WrapContents = false;
+        buttons.ColumnCount = 3;
+        buttons.RowCount = 1;
         buttons.Margin = new Padding(0, 10, 0, 0);
+        buttons.BackColor = BackColor;
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 106));
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 102));
 
         var okButton = new Button();
         okButton.Text = "OK";
         okButton.DialogResult = DialogResult.OK;
         okButton.Size = new Size(98, 34);
+        okButton.Dock = DockStyle.Fill;
+        okButton.Margin = new Padding(4, 0, 0, 0);
         StyleDialogButton(okButton, true);
 
         var cancelButton = new Button();
         cancelButton.Text = "Cancel";
         cancelButton.DialogResult = DialogResult.Cancel;
         cancelButton.Size = new Size(98, 34);
-        cancelButton.Margin = new Padding(8, 0, 0, 0);
+        cancelButton.Dock = DockStyle.Fill;
+        cancelButton.Margin = new Padding(0, 0, 4, 0);
         StyleDialogButton(cancelButton, false);
 
-        buttons.Controls.Add(okButton);
-        buttons.Controls.Add(cancelButton);
+        buttons.Controls.Add(cancelButton, 1, 0);
+        buttons.Controls.Add(okButton, 2, 0);
         outer.Controls.Add(root, 0, 0);
         outer.Controls.Add(buttons, 0, 1);
 
