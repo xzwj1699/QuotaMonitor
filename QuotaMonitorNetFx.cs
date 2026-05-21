@@ -2061,7 +2061,7 @@ internal sealed class SettingsForm : Form
         MinimizeBox = false;
         MaximizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(540, 540);
+        ClientSize = new Size(560, 620);
         BackColor = Color.FromArgb(248, 249, 250);
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -2090,10 +2090,20 @@ internal sealed class SettingsForm : Form
         _fiveHourThreshold.Value = ClampDecimal((decimal)config.alertFiveHourRemainingPercent, _fiveHourThreshold.Minimum, _fiveHourThreshold.Maximum);
         _longWindowThreshold.Value = ClampDecimal((decimal)config.alertLongWindowRemainingPercent, _longWindowThreshold.Minimum, _longWindowThreshold.Maximum);
 
+        var outer = new TableLayoutPanel();
+        outer.Dock = DockStyle.Fill;
+        outer.ColumnCount = 1;
+        outer.RowCount = 2;
+        outer.Padding = new Padding(18, 16, 18, 14);
+        outer.BackColor = BackColor;
+        outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+
         var root = new TableLayoutPanel();
         root.Dock = DockStyle.Fill;
         root.ColumnCount = 2;
-        root.Padding = new Padding(18, 16, 18, 14);
+        root.Margin = new Padding(0);
+        root.Padding = new Padding(0);
         root.BackColor = BackColor;
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -2119,7 +2129,7 @@ internal sealed class SettingsForm : Form
         buttons.FlowDirection = FlowDirection.RightToLeft;
         buttons.Dock = DockStyle.Fill;
         buttons.WrapContents = false;
-        buttons.Margin = new Padding(0, 12, 0, 0);
+        buttons.Margin = new Padding(0, 10, 0, 0);
 
         var okButton = new Button();
         okButton.Text = "OK";
@@ -2136,11 +2146,12 @@ internal sealed class SettingsForm : Form
 
         buttons.Controls.Add(okButton);
         buttons.Controls.Add(cancelButton);
-        AddFullWidth(root, buttons, 50);
+        outer.Controls.Add(root, 0, 0);
+        outer.Controls.Add(buttons, 0, 1);
 
         AcceptButton = okButton;
         CancelButton = cancelButton;
-        Controls.Add(root);
+        Controls.Add(outer);
 
         _alertsEnabled.CheckedChanged += delegate { SyncAlertControls(); };
         SyncAlertControls();
