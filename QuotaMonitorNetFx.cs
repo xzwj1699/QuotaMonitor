@@ -2272,9 +2272,9 @@ internal sealed class MainForm : Form
         StyleToggleButton(_dayHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Day, false);
         StyleToggleButton(_weekHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Week, false);
         StyleToggleButton(_monthHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Month, false);
-        _dayHistoryButton.Enabled = showHistory;
-        _weekHistoryButton.Enabled = showHistory;
-        _monthHistoryButton.Enabled = showHistory;
+        _dayHistoryButton.Enabled = true;
+        _weekHistoryButton.Enabled = true;
+        _monthHistoryButton.Enabled = true;
     }
 
     private static void StyleToggleButton(Button button, bool selected, bool primary)
