@@ -1313,16 +1313,38 @@ internal static class UsageHistoryStore
 
     private static List<UsageHistoryPoint> BuildUsageHistory(List<UsageSample> samples, HistoryAggregation aggregation)
     {
-        var bucketCount = aggregation == HistoryAggregation.Day ? 14 : aggregation == HistoryAggregation.Week ? 8 : 6;
-        var currentBucket = BucketStart(DateTime.Now, aggregation);
-        var firstBucket = AddPeriods(currentBucket, aggregation, -bucketCount + 1);
-        var buckets = new SortedDictionary<DateTime, double>();
-        for (var i = 0; i < bucketCount; i++)
+        var bucketLimit = aggregation == HistoryAggregation.Day ? 14 : aggregation == HistoryAggregation.Week ? 8 : 6;
+        var cleanedSamples = CleanSamplesForHistory(samples);
+        if (cleanedSamples.Count == 0)
         {
-            buckets[AddPeriods(firstBucket, aggregation, i)] = 0;
+            return new List<UsageHistoryPoint>();
         }
 
-        var cleanedSamples = CleanSamplesForHistory(samples);
+        var currentBucket = BucketStart(DateTime.Now, aggregation);
+        var observedBuckets = cleanedSamples
+            .Select(s => BucketStart(s.TimestampValue.LocalDateTime, aggregation))
+            .Where(bucket => bucket <= currentBucket)
+            .Distinct()
+            .OrderBy(bucket => bucket)
+            .ToList();
+
+        if (observedBuckets.Count == 0)
+        {
+            return new List<UsageHistoryPoint>();
+        }
+
+        if (observedBuckets.Count > bucketLimit)
+        {
+            observedBuckets = observedBuckets.Skip(observedBuckets.Count - bucketLimit).ToList();
+        }
+
+        var bucketSet = new HashSet<DateTime>(observedBuckets);
+        var buckets = new SortedDictionary<DateTime, double>();
+        foreach (var bucket in observedBuckets)
+        {
+            buckets[bucket] = 0;
+        }
+
         UsageSample previous = null;
         for (var i = 0; i < cleanedSamples.Count; i++)
         {
@@ -1334,7 +1356,7 @@ internal static class UsageHistoryStore
                 if (sameWindow && delta > 0.01)
                 {
                     var bucket = BucketStart(current.TimestampValue.LocalDateTime, aggregation);
-                    if (bucket >= firstBucket && bucket <= currentBucket)
+                    if (bucketSet.Contains(bucket))
                     {
                         buckets[bucket] = buckets[bucket] + delta;
                     }
@@ -1419,20 +1441,6 @@ internal static class UsageHistoryStore
         }
 
         return new DateTime(date.Year, date.Month, 1);
-    }
-
-    private static DateTime AddPeriods(DateTime value, HistoryAggregation aggregation, int periods)
-    {
-        if (aggregation == HistoryAggregation.Day)
-        {
-            return value.AddDays(periods);
-        }
-        if (aggregation == HistoryAggregation.Week)
-        {
-            return value.AddDays(periods * 7);
-        }
-
-        return value.AddMonths(periods);
     }
 
     private static string FormatBucketLabel(DateTime value, HistoryAggregation aggregation)
