@@ -9,12 +9,15 @@ A small Windows desktop monitor for Codex and Claude Code quota.
 - Optional Codex-only or Claude-only view.
 - Subscription type display for each visible service.
 - Realtime API first, local-log fallback.
+- Diagnostics view for source, fallback, login, and API errors.
 - Week/7d usage pace chart: dashed ideal line vs actual recorded usage.
 - Day/week/month usage history chart: bars show period quota consumed.
 - Custom quota alerts for low 5h and Week/7d remaining quota.
+- Pace charts estimate when quota will be exhausted at the current rate.
 - Auto refresh every 5 minutes by default.
 - System tray mode with restore, refresh, settings, and exit actions.
-- Resizable window, optional topmost mode, and standard minimize support.
+- Resizable window, optional topmost mode, compact mode, and light/dark themes.
+- Optional start with Windows.
 - No .NET SDK required; builds with the Windows built-in .NET Framework compiler.
 
 ## Run
@@ -32,7 +35,7 @@ Or:
 ```
 
 Use the chart controls to switch between `Pace` and `History`. When `History` is active, choose `Day`, `Week`, or `Month`.
-Right-click the window to switch Codex/Claude visibility, open settings, toggle topmost mode, refresh, minimize, or exit. Double-click the tray icon to restore the window.
+Right-click the window to switch Codex/Claude visibility, open diagnostics, open settings, toggle topmost mode, refresh, minimize, or exit. Double-click the tray icon to restore the window.
 
 ## Data Sources
 
@@ -88,6 +91,9 @@ Important settings:
 - `showCodex`: show or hide the Codex column.
 - `showClaude`: show or hide the Claude column.
 - `minimizeToTray`: hide the window to the system tray when minimized.
+- `startWithWindows`: register the app in the current user's Windows startup Run key.
+- `compactMode`: hide charts and show a smaller quota-bar-only view.
+- `theme`: `light` or `dark`.
 - `alertsEnabled`: show low-quota tray alerts.
 - `alertFiveHourRemainingPercent`: alert threshold for 5h quota.
 - `alertLongWindowRemainingPercent`: alert threshold for Week/7d quota.

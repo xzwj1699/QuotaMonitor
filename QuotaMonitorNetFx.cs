@@ -7,6 +7,7 @@ using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using Microsoft.Win32;
 using System.Net;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -62,6 +63,9 @@ internal sealed class MonitorConfig
     public bool showCodex { get; set; }
     public bool showClaude { get; set; }
     public bool minimizeToTray { get; set; }
+    public bool startWithWindows { get; set; }
+    public bool compactMode { get; set; }
+    public string theme { get; set; }
     public bool alertsEnabled { get; set; }
     public double alertFiveHourRemainingPercent { get; set; }
     public double alertLongWindowRemainingPercent { get; set; }
@@ -100,6 +104,9 @@ internal sealed class MonitorConfig
             showCodex = true,
             showClaude = true,
             minimizeToTray = true,
+            startWithWindows = false,
+            compactMode = false,
+            theme = "light",
             alertsEnabled = true,
             alertFiveHourRemainingPercent = 20,
             alertLongWindowRemainingPercent = 30,
@@ -151,6 +158,18 @@ internal sealed class MonitorConfig
             {
                 config.minimizeToTray = true;
             }
+            if (!raw.Contains("\"startWithWindows\""))
+            {
+                config.startWithWindows = false;
+            }
+            if (!raw.Contains("\"compactMode\""))
+            {
+                config.compactMode = false;
+            }
+            if (!raw.Contains("\"theme\"") || string.IsNullOrWhiteSpace(config.theme))
+            {
+                config.theme = "light";
+            }
             if (!raw.Contains("\"alertsEnabled\""))
             {
                 config.alertsEnabled = true;
@@ -168,6 +187,7 @@ internal sealed class MonitorConfig
             config.realtimeApiTimeoutSeconds = Math.Max(3, config.realtimeApiTimeoutSeconds);
             config.alertFiveHourRemainingPercent = ClampPercent(config.alertFiveHourRemainingPercent);
             config.alertLongWindowRemainingPercent = ClampPercent(config.alertLongWindowRemainingPercent);
+            config.theme = NormalizeTheme(config.theme);
 
             return config;
         }
@@ -242,6 +262,120 @@ internal sealed class MonitorConfig
 
         return Math.Max(0, Math.Min(100, value));
     }
+
+    public static string NormalizeTheme(string value)
+    {
+        if (string.Equals(value, "dark", StringComparison.OrdinalIgnoreCase))
+        {
+            return "dark";
+        }
+
+        return "light";
+    }
+}
+
+internal static class StartupRegistration
+{
+    private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+    private const string ValueName = "QuotaMonitor";
+
+    public static void Sync(bool enabled)
+    {
+        try
+        {
+            using (var key = Registry.CurrentUser.OpenSubKey(RunKeyPath, true))
+            {
+                if (key == null)
+                {
+                    return;
+                }
+
+                if (enabled)
+                {
+                    key.SetValue(ValueName, "\"" + Application.ExecutablePath + "\"", RegistryValueKind.String);
+                }
+                else
+                {
+                    key.DeleteValue(ValueName, false);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("startup sync error: " + ex.Message);
+        }
+    }
+}
+
+internal sealed class UiTheme
+{
+    public string Name;
+    public Color Background;
+    public Color Text;
+    public Color MutedText;
+    public Color Border;
+    public Color Grid;
+    public Color Track;
+    public Color Accent;
+    public Color AccentText;
+    public Color Danger;
+    public Color Warning;
+    public Color ButtonBack;
+    public Color ButtonHover;
+    public Color ButtonDown;
+    public Color PrimarySelectedBack;
+    public Color SecondarySelectedBack;
+    public Color ChartBar;
+}
+
+internal static class UiThemes
+{
+    public static UiTheme FromConfig(string theme)
+    {
+        return string.Equals(theme, "dark", StringComparison.OrdinalIgnoreCase) ? Dark : Light;
+    }
+
+    public static readonly UiTheme Light = new UiTheme
+    {
+        Name = "light",
+        Background = Color.FromArgb(248, 249, 250),
+        Text = Color.FromArgb(30, 34, 40),
+        MutedText = Color.FromArgb(92, 98, 108),
+        Border = Color.FromArgb(214, 219, 226),
+        Grid = Color.FromArgb(229, 233, 238),
+        Track = Color.FromArgb(225, 229, 235),
+        Accent = Color.FromArgb(37, 120, 214),
+        AccentText = Color.FromArgb(24, 78, 148),
+        Danger = Color.FromArgb(209, 66, 57),
+        Warning = Color.FromArgb(210, 139, 36),
+        ButtonBack = Color.FromArgb(244, 246, 249),
+        ButtonHover = Color.FromArgb(236, 240, 245),
+        ButtonDown = Color.FromArgb(226, 232, 239),
+        PrimarySelectedBack = Color.FromArgb(224, 238, 255),
+        SecondarySelectedBack = Color.FromArgb(235, 239, 244),
+        ChartBar = Color.FromArgb(92, 151, 224)
+    };
+
+    public static readonly UiTheme Dark = new UiTheme
+    {
+        Name = "dark",
+        Background = Color.FromArgb(24, 27, 31),
+        Text = Color.FromArgb(236, 239, 243),
+        MutedText = Color.FromArgb(165, 173, 184),
+        Border = Color.FromArgb(67, 75, 86),
+        Grid = Color.FromArgb(45, 51, 60),
+        Track = Color.FromArgb(49, 55, 64),
+        Accent = Color.FromArgb(88, 166, 255),
+        AccentText = Color.FromArgb(168, 205, 255),
+        Danger = Color.FromArgb(236, 96, 85),
+        Warning = Color.FromArgb(226, 163, 74),
+        ButtonBack = Color.FromArgb(34, 39, 46),
+        ButtonHover = Color.FromArgb(44, 51, 60),
+        ButtonDown = Color.FromArgb(54, 63, 74),
+        PrimarySelectedBack = Color.FromArgb(30, 58, 92),
+        SecondarySelectedBack = Color.FromArgb(48, 55, 65),
+        ChartBar = Color.FromArgb(105, 166, 235)
+    };
 }
 
 internal static class QuotaReader
@@ -910,12 +1044,13 @@ internal sealed class ServiceHeaderControl : Control
 {
     private readonly string _serviceName;
     private string _planText = "Plan: --";
+    private UiTheme _theme = UiThemes.Light;
 
     public ServiceHeaderControl(string serviceName)
     {
         _serviceName = serviceName ?? "";
         DoubleBuffered = true;
-        BackColor = Color.FromArgb(248, 249, 250);
+        BackColor = _theme.Background;
         Dock = DockStyle.Fill;
         Margin = new Padding(0);
         MinimumSize = new Size(120, 44);
@@ -925,6 +1060,13 @@ internal sealed class ServiceHeaderControl : Control
     public void SetPlan(string planText)
     {
         _planText = string.IsNullOrWhiteSpace(planText) ? "Plan: unknown" : planText;
+        Invalidate();
+    }
+
+    public void SetTheme(UiTheme theme)
+    {
+        _theme = theme ?? UiThemes.Light;
+        BackColor = _theme.Background;
         Invalidate();
     }
 
@@ -942,7 +1084,7 @@ internal sealed class ServiceHeaderControl : Control
                 _serviceName,
                 titleFont,
                 new Rectangle(0, 0, Width, 25),
-                Color.FromArgb(30, 34, 40),
+                _theme.Text,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
         }
 
@@ -953,7 +1095,7 @@ internal sealed class ServiceHeaderControl : Control
                 _planText,
                 planFont,
                 new Rectangle(0, 25, Width, 18),
-                Color.FromArgb(92, 98, 108),
+                _theme.MutedText,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
         }
     }
@@ -964,6 +1106,7 @@ internal sealed class QuotaBarControl : Control
     private string _title = "";
     private string _detail = "";
     private double? _remainingPercent;
+    private UiTheme _theme = UiThemes.Light;
 
     public QuotaBarControl()
     {
@@ -975,9 +1118,16 @@ internal sealed class QuotaBarControl : Control
             ControlStyles.OptimizedDoubleBuffer |
             ControlStyles.ResizeRedraw,
             true);
-        BackColor = Color.FromArgb(248, 249, 250);
+        BackColor = _theme.Background;
         MinimumSize = new Size(260, 72);
         Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point);
+    }
+
+    public void SetTheme(UiTheme theme)
+    {
+        _theme = theme ?? UiThemes.Light;
+        BackColor = _theme.Background;
+        Invalidate();
     }
 
     public void SetData(string title, string detail, double? remainingPercent)
@@ -1000,11 +1150,11 @@ internal sealed class QuotaBarControl : Control
         g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
         g.Clear(BackColor);
 
-        var titleColor = PickTextColor(_remainingPercent);
-        var detailColor = Color.FromArgb(92, 98, 108);
-        var trackColor = Color.FromArgb(225, 229, 235);
-        var fillColor = PickFillColor(_remainingPercent);
-        var borderColor = Color.FromArgb(214, 219, 226);
+        var titleColor = PickTextColor(_remainingPercent, _theme);
+        var detailColor = _theme.MutedText;
+        var trackColor = _theme.Track;
+        var fillColor = PickFillColor(_remainingPercent, _theme);
+        var borderColor = _theme.Border;
 
         var titleBounds = new Rectangle(0, 2, Width, 20);
         var detailBounds = new Rectangle(0, 27, Width, 18);
@@ -1078,40 +1228,40 @@ internal sealed class QuotaBarControl : Control
         return path;
     }
 
-    private static Color PickFillColor(double? remainingPercent)
+    private static Color PickFillColor(double? remainingPercent, UiTheme theme)
     {
         if (!remainingPercent.HasValue)
         {
-            return Color.FromArgb(152, 161, 174);
+            return theme.MutedText;
         }
         if (remainingPercent.Value <= 10)
         {
-            return Color.FromArgb(209, 66, 57);
+            return theme.Danger;
         }
         if (remainingPercent.Value <= 25)
         {
-            return Color.FromArgb(210, 139, 36);
+            return theme.Warning;
         }
 
-        return Color.FromArgb(37, 120, 214);
+        return theme.Accent;
     }
 
-    private static Color PickTextColor(double? remainingPercent)
+    private static Color PickTextColor(double? remainingPercent, UiTheme theme)
     {
         if (!remainingPercent.HasValue)
         {
-            return Color.FromArgb(51, 57, 66);
+            return theme.Text;
         }
         if (remainingPercent.Value <= 10)
         {
-            return Color.FromArgb(160, 48, 42);
+            return theme.Danger;
         }
         if (remainingPercent.Value <= 25)
         {
-            return Color.FromArgb(153, 98, 20);
+            return theme.Warning;
         }
 
-        return Color.FromArgb(24, 78, 148);
+        return theme.AccentText;
     }
 }
 
@@ -1528,12 +1678,13 @@ internal sealed class UsagePaceChartControl : Control
     private DateTimeOffset? _resetAt;
     private int _windowMinutes;
     private double? _currentUsedPercent;
+    private UiTheme _theme = UiThemes.Light;
 
     public UsagePaceChartControl()
     {
         DoubleBuffered = true;
         ResizeRedraw = true;
-        BackColor = Color.FromArgb(248, 249, 250);
+        BackColor = _theme.Background;
         Dock = DockStyle.Fill;
         Margin = new Padding(0, 8, 0, 6);
         MinimumSize = new Size(260, 160);
@@ -1558,6 +1709,13 @@ internal sealed class UsagePaceChartControl : Control
         Invalidate();
     }
 
+    public void SetTheme(UiTheme theme)
+    {
+        _theme = theme ?? UiThemes.Light;
+        BackColor = _theme.Background;
+        Invalidate();
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
@@ -1568,11 +1726,11 @@ internal sealed class UsagePaceChartControl : Control
         g.Clear(BackColor);
 
         var plot = CalculatePlotRectangle();
-        var borderColor = Color.FromArgb(214, 219, 226);
-        var gridColor = Color.FromArgb(229, 233, 238);
-        var idealColor = Color.FromArgb(142, 151, 164);
-        var actualColor = Color.FromArgb(37, 120, 214);
-        var axisColor = Color.FromArgb(111, 119, 132);
+        var borderColor = _theme.Border;
+        var gridColor = _theme.Grid;
+        var idealColor = _theme.MutedText;
+        var actualColor = _theme.Accent;
+        var axisColor = _theme.MutedText;
 
         using (var titleFont = new Font(Font, FontStyle.Bold))
         {
@@ -1581,13 +1739,21 @@ internal sealed class UsagePaceChartControl : Control
                 BuildTitle(),
                 titleFont,
                 new Rectangle(0, 1, Width - 8, 20),
-                Color.FromArgb(48, 54, 64),
+                _theme.Text,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
         }
 
+        TextRenderer.DrawText(
+            g,
+            BuildPredictionText(),
+            Font,
+            new Rectangle(0, 20, Width - 8, 18),
+            axisColor,
+            TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+
         if (!_resetAt.HasValue || _windowMinutes <= 0)
         {
-            TextRenderer.DrawText(g, "No pace data yet", Font, plot, Color.FromArgb(92, 98, 108));
+            TextRenderer.DrawText(g, "No pace data yet", Font, plot, _theme.MutedText);
             return;
         }
 
@@ -1646,7 +1812,7 @@ internal sealed class UsagePaceChartControl : Control
             }
         }
 
-        using (var nowPen = new Pen(Color.FromArgb(180, 184, 190), 1F))
+        using (var nowPen = new Pen(_theme.Border, 1F))
         {
             g.DrawLine(nowPen, plot.Left + (float)(plot.Width * nowX), plot.Top, plot.Left + (float)(plot.Width * nowX), plot.Bottom);
         }
@@ -1669,7 +1835,7 @@ internal sealed class UsagePaceChartControl : Control
     private Rectangle CalculatePlotRectangle()
     {
         const int leftMargin = 50;
-        const int topMargin = 34;
+        const int topMargin = 52;
         const int rightMargin = 10;
         const int bottomMargin = 30;
         var available = new Rectangle(
@@ -1796,6 +1962,47 @@ internal sealed class UsagePaceChartControl : Control
         return _title + " - " + pace;
     }
 
+    private string BuildPredictionText()
+    {
+        if (!_resetAt.HasValue || !_currentUsedPercent.HasValue || _windowMinutes <= 0)
+        {
+            return "prediction unavailable";
+        }
+
+        var start = _resetAt.Value.AddMinutes(-_windowMinutes);
+        var now = DateTimeOffset.Now;
+        var elapsedHours = Math.Max(0.02, (now - start).TotalHours);
+        var remainingHours = Math.Max(0, (_resetAt.Value - now).TotalHours);
+        var used = Math.Max(0, Math.Min(100, _currentUsedPercent.Value));
+        var currentRate = used / elapsedHours;
+        var safeRate = (100 - used) / Math.Max(0.02, remainingHours);
+
+        string emptyText;
+        if (used >= 99.5)
+        {
+            emptyText = "empty now";
+        }
+        else if (currentRate <= 0.01)
+        {
+            emptyText = "empty unknown";
+        }
+        else
+        {
+            var hoursToEmpty = (100 - used) / currentRate;
+            var estimatedEmpty = now.AddHours(hoursToEmpty);
+            emptyText = estimatedEmpty <= _resetAt.Value
+                ? "empty " + estimatedEmpty.LocalDateTime.ToString("M/d HH:mm", CultureInfo.InvariantCulture)
+                : "empty after reset";
+        }
+
+        return string.Format(
+            CultureInfo.InvariantCulture,
+            "{0} | rate {1:0.0}%/h | safe {2:0.0}%/h",
+            emptyText,
+            currentRate,
+            safeRate);
+    }
+
     private static PointF PointFor(Rectangle plot, double x, double usedPercent)
     {
         var px = plot.Left + (float)(plot.Width * Clamp01(x));
@@ -1819,12 +2026,13 @@ internal sealed class UsageHistoryChartControl : Control
     private string _title = "Usage history";
     private HistoryAggregation _aggregation = HistoryAggregation.Day;
     private List<UsageHistoryPoint> _points = new List<UsageHistoryPoint>();
+    private UiTheme _theme = UiThemes.Light;
 
     public UsageHistoryChartControl()
     {
         DoubleBuffered = true;
         ResizeRedraw = true;
-        BackColor = Color.FromArgb(248, 249, 250);
+        BackColor = _theme.Background;
         Dock = DockStyle.Fill;
         MinimumSize = new Size(260, 160);
         Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point);
@@ -1838,6 +2046,13 @@ internal sealed class UsageHistoryChartControl : Control
         Invalidate();
     }
 
+    public void SetTheme(UiTheme theme)
+    {
+        _theme = theme ?? UiThemes.Light;
+        BackColor = _theme.Background;
+        Invalidate();
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
@@ -1848,10 +2063,10 @@ internal sealed class UsageHistoryChartControl : Control
         g.Clear(BackColor);
 
         var plot = CalculatePlotRectangle();
-        var borderColor = Color.FromArgb(214, 219, 226);
-        var gridColor = Color.FromArgb(229, 233, 238);
-        var axisColor = Color.FromArgb(111, 119, 132);
-        var barColor = Color.FromArgb(92, 151, 224);
+        var borderColor = _theme.Border;
+        var gridColor = _theme.Grid;
+        var axisColor = _theme.MutedText;
+        var barColor = _theme.ChartBar;
 
         using (var titleFont = new Font(Font, FontStyle.Bold))
         {
@@ -1860,7 +2075,7 @@ internal sealed class UsageHistoryChartControl : Control
                 _title + " - " + AggregationLabel(_aggregation),
                 titleFont,
                 new Rectangle(0, 1, Width - 8, 20),
-                Color.FromArgb(48, 54, 64),
+                _theme.Text,
                 TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
         }
 
@@ -1881,7 +2096,7 @@ internal sealed class UsageHistoryChartControl : Control
 
         if (_points.Count == 0)
         {
-            TextRenderer.DrawText(g, "No history yet", Font, plot, Color.FromArgb(92, 98, 108));
+            TextRenderer.DrawText(g, "No history yet", Font, plot, _theme.MutedText);
             return;
         }
 
@@ -2045,9 +2260,12 @@ internal sealed class SettingsForm : Form
     private readonly CheckBox _showClaude;
     private readonly CheckBox _alwaysOnTop;
     private readonly CheckBox _minimizeToTray;
+    private readonly CheckBox _startWithWindows;
     private readonly CheckBox _startAtTopRight;
+    private readonly CheckBox _compactMode;
     private readonly CheckBox _useRealtimeApi;
     private readonly CheckBox _alertsEnabled;
+    private readonly ComboBox _theme;
     private readonly NumericUpDown _pollIntervalSeconds;
     private readonly NumericUpDown _realtimeTimeoutSeconds;
     private readonly NumericUpDown _fiveHourThreshold;
@@ -2061,7 +2279,7 @@ internal sealed class SettingsForm : Form
         MinimizeBox = false;
         MaximizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(560, 620);
+        ClientSize = new Size(560, 700);
         BackColor = Color.FromArgb(248, 249, 250);
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -2070,9 +2288,12 @@ internal sealed class SettingsForm : Form
         _showClaude = new CheckBox();
         _alwaysOnTop = new CheckBox();
         _minimizeToTray = new CheckBox();
+        _startWithWindows = new CheckBox();
         _startAtTopRight = new CheckBox();
+        _compactMode = new CheckBox();
         _useRealtimeApi = new CheckBox();
         _alertsEnabled = new CheckBox();
+        _theme = new ComboBox();
         _pollIntervalSeconds = BuildNumber(3, 86400, 0);
         _realtimeTimeoutSeconds = BuildNumber(3, 120, 0);
         _fiveHourThreshold = BuildNumber(0, 100, 0);
@@ -2082,9 +2303,12 @@ internal sealed class SettingsForm : Form
         _showClaude.Checked = config.ClaudeVisible;
         _alwaysOnTop.Checked = config.alwaysOnTop;
         _minimizeToTray.Checked = config.minimizeToTray;
+        _startWithWindows.Checked = config.startWithWindows;
         _startAtTopRight.Checked = config.startAtTopRight;
+        _compactMode.Checked = config.compactMode;
         _useRealtimeApi.Checked = config.useRealtimeApi;
         _alertsEnabled.Checked = config.alertsEnabled;
+        ConfigureThemePicker(_theme, config.theme);
         _pollIntervalSeconds.Value = ClampDecimal(config.pollIntervalSeconds, _pollIntervalSeconds.Minimum, _pollIntervalSeconds.Maximum);
         _realtimeTimeoutSeconds.Value = ClampDecimal(config.realtimeApiTimeoutSeconds, _realtimeTimeoutSeconds.Minimum, _realtimeTimeoutSeconds.Maximum);
         _fiveHourThreshold.Value = ClampDecimal((decimal)config.alertFiveHourRemainingPercent, _fiveHourThreshold.Minimum, _fiveHourThreshold.Maximum);
@@ -2113,7 +2337,10 @@ internal sealed class SettingsForm : Form
         AddCheck(root, _showClaude, "Show Claude");
         AddCheck(root, _alwaysOnTop, "Always on top");
         AddCheck(root, _minimizeToTray, "Minimize to system tray");
+        AddCheck(root, _startWithWindows, "Start with Windows");
         AddCheck(root, _startAtTopRight, "Start at top-right");
+        AddCheck(root, _compactMode, "Compact mode");
+        AddCombo(root, "Theme", _theme);
 
         AddSection(root, "Refresh");
         AddCheck(root, _useRealtimeApi, "Use realtime API");
@@ -2163,9 +2390,12 @@ internal sealed class SettingsForm : Form
         config.showClaude = _showClaude.Checked;
         config.alwaysOnTop = _alwaysOnTop.Checked;
         config.minimizeToTray = _minimizeToTray.Checked;
+        config.startWithWindows = _startWithWindows.Checked;
         config.startAtTopRight = _startAtTopRight.Checked;
+        config.compactMode = _compactMode.Checked;
         config.useRealtimeApi = _useRealtimeApi.Checked;
         config.alertsEnabled = _alertsEnabled.Checked;
+        config.theme = _theme.SelectedIndex == 1 ? "dark" : "light";
         config.pollIntervalSeconds = (int)_pollIntervalSeconds.Value;
         config.realtimeApiTimeoutSeconds = (int)_realtimeTimeoutSeconds.Value;
         config.alertFiveHourRemainingPercent = (double)_fiveHourThreshold.Value;
@@ -2201,6 +2431,17 @@ internal sealed class SettingsForm : Form
         number.TextAlign = HorizontalAlignment.Right;
         number.Margin = new Padding(0, 3, 0, 3);
         return number;
+    }
+
+    private static void ConfigureThemePicker(ComboBox comboBox, string selectedTheme)
+    {
+        comboBox.DropDownStyle = ComboBoxStyle.DropDownList;
+        comboBox.Dock = DockStyle.Left;
+        comboBox.Width = 124;
+        comboBox.Margin = new Padding(0, 3, 0, 3);
+        comboBox.Items.Add("Light");
+        comboBox.Items.Add("Dark");
+        comboBox.SelectedIndex = string.Equals(selectedTheme, "dark", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
     }
 
     private static void AddSection(TableLayoutPanel root, string text)
@@ -2239,6 +2480,19 @@ internal sealed class SettingsForm : Form
         root.Controls.Add(number, 1, row);
     }
 
+    private static void AddCombo(TableLayoutPanel root, string text, ComboBox comboBox)
+    {
+        var row = AddRow(root, 36);
+        var label = new Label();
+        label.Text = text;
+        label.Dock = DockStyle.Fill;
+        label.TextAlign = ContentAlignment.MiddleLeft;
+        label.ForeColor = Color.FromArgb(45, 52, 62);
+        label.Margin = new Padding(0, 3, 10, 3);
+        root.Controls.Add(label, 0, row);
+        root.Controls.Add(comboBox, 1, row);
+    }
+
     private static void AddFullWidth(TableLayoutPanel root, Control control, int height)
     {
         var row = AddRow(root, height);
@@ -2273,6 +2527,7 @@ internal sealed class SettingsForm : Form
 internal sealed class MainForm : Form
 {
     private readonly MonitorConfig _config;
+    private UiTheme _theme;
     private readonly System.Windows.Forms.Timer _timer;
     private readonly QuotaBarControl _codexFiveHour;
     private readonly QuotaBarControl _codexWeek;
@@ -2294,9 +2549,13 @@ internal sealed class MainForm : Form
     private readonly Button _monthHistoryButton;
     private readonly FlowLayoutPanel _historyRangePanel;
     private readonly HashSet<string> _shownAlertKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    private TableLayoutPanel _rootLayout;
+    private Control _chartToolbar;
     private TableLayoutPanel _columns;
-    private Control _codexColumn;
-    private Control _claudeColumn;
+    private TableLayoutPanel _codexColumn;
+    private TableLayoutPanel _claudeColumn;
+    private Panel _codexChartHost;
+    private Panel _claudeChartHost;
     private NotifyIcon _trayIcon;
     private ToolStripMenuItem _topMostMenuItem;
     private ToolStripMenuItem _showCodexMenuItem;
@@ -2307,22 +2566,26 @@ internal sealed class MainForm : Form
     private volatile bool _refreshInProgress;
     private bool _syncingTopMostControl;
     private bool _syncingServiceMenu;
+    private DateTimeOffset? _lastSuccessfulRefreshAt;
+    private string _lastDiagnosticsText = "No refresh completed yet.";
     private ChartMode _chartMode = ChartMode.Pace;
     private HistoryAggregation _historyAggregation = HistoryAggregation.Day;
 
     public MainForm()
     {
         _config = MonitorConfig.LoadOrCreate();
+        _theme = UiThemes.FromConfig(_config.theme);
+        StartupRegistration.Sync(_config.startWithWindows);
 
         Text = "Quota Monitor";
-        ClientSize = new Size(960, 640);
-        MinimumSize = new Size(780, 560);
+        ClientSize = _config.compactMode ? new Size(720, 300) : new Size(960, 640);
+        MinimumSize = _config.compactMode ? new Size(560, 240) : new Size(780, 560);
         FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = true;
         MaximizeBox = true;
         ShowInTaskbar = true;
         TopMost = _config.alwaysOnTop;
-        BackColor = Color.FromArgb(248, 249, 250);
+        BackColor = _theme.Background;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
         AutoScaleMode = AutoScaleMode.Dpi;
         try
@@ -2377,25 +2640,26 @@ internal sealed class MainForm : Form
 
     private void BuildUi()
     {
-        var root = new TableLayoutPanel();
-        root.Dock = DockStyle.Fill;
-        root.ColumnCount = 1;
-        root.RowCount = 3;
-        root.Padding = new Padding(10);
-        root.BackColor = BackColor;
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        _rootLayout = new TableLayoutPanel();
+        _rootLayout.Dock = DockStyle.Fill;
+        _rootLayout.ColumnCount = 1;
+        _rootLayout.RowCount = 3;
+        _rootLayout.Padding = new Padding(10);
+        _rootLayout.BackColor = BackColor;
+        _rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
+        _rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
 
         _columns = new TableLayoutPanel();
         _columns.Dock = DockStyle.Fill;
         _columns.RowCount = 1;
         _columns.Margin = new Padding(0, 0, 0, 8);
-        _codexColumn = BuildServiceColumn(_codexHeader, _codexFiveHour, _codexWeek, _codexPaceChart, _codexHistoryChart);
-        _claudeColumn = BuildServiceColumn(_claudeHeader, _claudeFiveHour, _claudeWeek, _claudePaceChart, _claudeHistoryChart);
+        _codexColumn = BuildServiceColumn(_codexHeader, _codexFiveHour, _codexWeek, _codexPaceChart, _codexHistoryChart, out _codexChartHost);
+        _claudeColumn = BuildServiceColumn(_claudeHeader, _claudeFiveHour, _claudeWeek, _claudePaceChart, _claudeHistoryChart, out _claudeChartHost);
         ApplyServiceVisibility(false);
-        root.Controls.Add(_columns, 0, 0);
-        root.Controls.Add(BuildChartToolbar(), 0, 1);
+        _rootLayout.Controls.Add(_columns, 0, 0);
+        _chartToolbar = BuildChartToolbar();
+        _rootLayout.Controls.Add(_chartToolbar, 0, 1);
 
         var bottom = new TableLayoutPanel();
         bottom.Dock = DockStyle.Fill;
@@ -2410,7 +2674,7 @@ internal sealed class MainForm : Form
         _refreshButton.Dock = DockStyle.Fill;
         _refreshButton.MinimumSize = new Size(108, 30);
         _refreshButton.Margin = new Padding(8, 4, 0, 2);
-        StyleActionButton(_refreshButton);
+        StyleActionButton(_refreshButton, _theme);
         _refreshButton.Click += delegate { RefreshSnapshot(); };
 
         _topMostCheckBox.Text = "Topmost";
@@ -2418,7 +2682,7 @@ internal sealed class MainForm : Form
         _topMostCheckBox.Checked = _config.alwaysOnTop;
         _topMostCheckBox.AutoSize = false;
         _topMostCheckBox.TextAlign = ContentAlignment.MiddleLeft;
-        _topMostCheckBox.ForeColor = Color.FromArgb(52, 58, 66);
+        _topMostCheckBox.ForeColor = _theme.Text;
         _topMostCheckBox.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
         _topMostCheckBox.Margin = new Padding(8, 5, 0, 0);
         _topMostCheckBox.CheckedChanged += delegate
@@ -2430,17 +2694,19 @@ internal sealed class MainForm : Form
         };
 
         _status.Dock = DockStyle.Fill;
-        _status.ForeColor = Color.FromArgb(90, 96, 106);
+        _status.ForeColor = _theme.MutedText;
         _status.TextAlign = ContentAlignment.MiddleLeft;
         _status.AutoEllipsis = true;
         _status.Margin = new Padding(0, 3, 4, 0);
         bottom.Controls.Add(_status, 0, 0);
         bottom.Controls.Add(_topMostCheckBox, 1, 0);
         bottom.Controls.Add(_refreshButton, 2, 0);
-        root.Controls.Add(bottom, 0, 2);
+        _rootLayout.Controls.Add(bottom, 0, 2);
 
-        Controls.Add(root);
+        Controls.Add(_rootLayout);
         ApplyChartMode();
+        ApplyCompactMode();
+        ApplyTheme();
     }
 
     private Control BuildChartToolbar()
@@ -2519,50 +2785,131 @@ internal sealed class MainForm : Form
 
     private void ApplyChartMode()
     {
-        var showHistory = _chartMode == ChartMode.History;
-        _codexPaceChart.Visible = !showHistory;
-        _claudePaceChart.Visible = !showHistory;
+        var showHistory = _chartMode == ChartMode.History && !_config.compactMode;
+        var showCharts = !_config.compactMode;
+        _codexPaceChart.Visible = showCharts && !showHistory;
+        _claudePaceChart.Visible = showCharts && !showHistory;
         _codexHistoryChart.Visible = showHistory;
         _claudeHistoryChart.Visible = showHistory;
         _historyRangePanel.Visible = showHistory;
+        _paceModeButton.Enabled = showCharts;
+        _historyModeButton.Enabled = showCharts;
 
-        StyleToggleButton(_paceModeButton, _chartMode == ChartMode.Pace, true);
-        StyleToggleButton(_historyModeButton, _chartMode == ChartMode.History, true);
-        StyleToggleButton(_dayHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Day, false);
-        StyleToggleButton(_weekHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Week, false);
-        StyleToggleButton(_monthHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Month, false);
+        StyleToggleButton(_paceModeButton, _chartMode == ChartMode.Pace, true, _theme);
+        StyleToggleButton(_historyModeButton, _chartMode == ChartMode.History, true, _theme);
+        StyleToggleButton(_dayHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Day, false, _theme);
+        StyleToggleButton(_weekHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Week, false, _theme);
+        StyleToggleButton(_monthHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Month, false, _theme);
         _dayHistoryButton.Enabled = true;
         _weekHistoryButton.Enabled = true;
         _monthHistoryButton.Enabled = true;
     }
 
-    private static void StyleToggleButton(Button button, bool selected, bool primary)
+    private void ApplyCompactMode()
+    {
+        if (_rootLayout == null)
+        {
+            return;
+        }
+
+        var compact = _config.compactMode;
+        _chartToolbar.Visible = !compact;
+        _codexChartHost.Visible = !compact;
+        _claudeChartHost.Visible = !compact;
+        _rootLayout.RowStyles[1].SizeType = SizeType.Absolute;
+        _rootLayout.RowStyles[1].Height = compact ? 0 : 46;
+        ApplyColumnCompactMode(_codexColumn, compact);
+        ApplyColumnCompactMode(_claudeColumn, compact);
+        MinimumSize = compact ? new Size(560, 240) : new Size(780, 560);
+        if (compact && Height > 360)
+        {
+            Height = 300;
+        }
+        else if (!compact && Height < 560)
+        {
+            Height = 640;
+        }
+
+        ApplyChartMode();
+        PerformLayout();
+    }
+
+    private void ApplyTheme()
+    {
+        _theme = UiThemes.FromConfig(_config.theme);
+        BackColor = _theme.Background;
+        ApplyBackColorRecursive(this, _theme.Background);
+
+        _codexHeader.SetTheme(_theme);
+        _claudeHeader.SetTheme(_theme);
+        _codexFiveHour.SetTheme(_theme);
+        _codexWeek.SetTheme(_theme);
+        _claudeFiveHour.SetTheme(_theme);
+        _claudeWeek.SetTheme(_theme);
+        _codexPaceChart.SetTheme(_theme);
+        _claudePaceChart.SetTheme(_theme);
+        _codexHistoryChart.SetTheme(_theme);
+        _claudeHistoryChart.SetTheme(_theme);
+
+        _topMostCheckBox.ForeColor = _theme.Text;
+        _status.ForeColor = _theme.MutedText;
+        StyleActionButton(_refreshButton, _theme);
+        ApplyChartMode();
+        Invalidate(true);
+    }
+
+    private static void ApplyBackColorRecursive(Control control, Color color)
+    {
+        if (!(control is Button) && !(control is CheckBox) && !(control is NumericUpDown) && !(control is ComboBox))
+        {
+            control.BackColor = color;
+        }
+
+        foreach (Control child in control.Controls)
+        {
+            ApplyBackColorRecursive(child, color);
+        }
+    }
+
+    private static void ApplyColumnCompactMode(TableLayoutPanel column, bool compact)
+    {
+        if (column == null || column.RowStyles.Count < 4)
+        {
+            return;
+        }
+
+        column.RowStyles[3].SizeType = compact ? SizeType.Absolute : SizeType.Percent;
+        column.RowStyles[3].Height = compact ? 0 : 100;
+        column.Padding = compact ? new Padding(10, 8, 10, 4) : new Padding(10, 8, 10, 8);
+    }
+
+    private static void StyleToggleButton(Button button, bool selected, bool primary, UiTheme theme)
     {
         if (selected && primary)
         {
-            button.FlatAppearance.BorderColor = Color.FromArgb(37, 120, 214);
-            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(216, 232, 252);
-            button.FlatAppearance.MouseDownBackColor = Color.FromArgb(204, 224, 249);
-            button.BackColor = Color.FromArgb(224, 238, 255);
-            button.ForeColor = Color.FromArgb(24, 78, 148);
+            button.FlatAppearance.BorderColor = theme.Accent;
+            button.FlatAppearance.MouseOverBackColor = theme.ButtonHover;
+            button.FlatAppearance.MouseDownBackColor = theme.ButtonDown;
+            button.BackColor = theme.PrimarySelectedBack;
+            button.ForeColor = theme.AccentText;
             return;
         }
 
         if (selected)
         {
-            button.FlatAppearance.BorderColor = Color.FromArgb(142, 151, 164);
-            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(226, 230, 236);
-            button.FlatAppearance.MouseDownBackColor = Color.FromArgb(216, 222, 230);
-            button.BackColor = Color.FromArgb(235, 239, 244);
-            button.ForeColor = Color.FromArgb(32, 38, 47);
+            button.FlatAppearance.BorderColor = theme.MutedText;
+            button.FlatAppearance.MouseOverBackColor = theme.ButtonHover;
+            button.FlatAppearance.MouseDownBackColor = theme.ButtonDown;
+            button.BackColor = theme.SecondarySelectedBack;
+            button.ForeColor = theme.Text;
             return;
         }
 
-        button.FlatAppearance.BorderColor = Color.FromArgb(200, 205, 212);
-        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(236, 240, 245);
-        button.FlatAppearance.MouseDownBackColor = Color.FromArgb(226, 232, 239);
-        button.BackColor = Color.FromArgb(244, 246, 249);
-        button.ForeColor = Color.FromArgb(52, 58, 66);
+        button.FlatAppearance.BorderColor = theme.Border;
+        button.FlatAppearance.MouseOverBackColor = theme.ButtonHover;
+        button.FlatAppearance.MouseDownBackColor = theme.ButtonDown;
+        button.BackColor = theme.ButtonBack;
+        button.ForeColor = theme.Text;
     }
 
     private void ApplyServiceVisibility(bool persist)
@@ -2662,17 +3009,25 @@ internal sealed class MainForm : Form
         RefreshSnapshot();
     }
 
-    private static void StyleActionButton(Button button)
+    private static void StyleActionButton(Button button, UiTheme theme)
     {
         button.FlatStyle = FlatStyle.Flat;
-        button.FlatAppearance.BorderColor = Color.FromArgb(200, 205, 212);
+        button.FlatAppearance.BorderColor = theme.Border;
         button.FlatAppearance.BorderSize = 1;
-        button.BackColor = Color.FromArgb(244, 246, 249);
-        button.ForeColor = Color.FromArgb(35, 41, 48);
+        button.FlatAppearance.MouseOverBackColor = theme.ButtonHover;
+        button.FlatAppearance.MouseDownBackColor = theme.ButtonDown;
+        button.BackColor = theme.ButtonBack;
+        button.ForeColor = theme.Text;
         button.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
     }
 
-    private static Control BuildServiceColumn(ServiceHeaderControl header, QuotaBarControl first, QuotaBarControl second, UsagePaceChartControl paceChart, UsageHistoryChartControl historyChart)
+    private static TableLayoutPanel BuildServiceColumn(
+        ServiceHeaderControl header,
+        QuotaBarControl first,
+        QuotaBarControl second,
+        UsagePaceChartControl paceChart,
+        UsageHistoryChartControl historyChart,
+        out Panel chartHost)
     {
         var column = new TableLayoutPanel();
         column.Dock = DockStyle.Fill;
@@ -2693,7 +3048,7 @@ internal sealed class MainForm : Form
         first.Margin = new Padding(0, 0, 0, 2);
         second.Margin = new Padding(0, 2, 0, 0);
 
-        var chartHost = new Panel();
+        chartHost = new Panel();
         chartHost.Dock = DockStyle.Fill;
         chartHost.Margin = new Padding(0, 12, 0, 0);
         chartHost.BackColor = Color.FromArgb(248, 249, 250);
@@ -2749,6 +3104,7 @@ internal sealed class MainForm : Form
             }
         };
         menu.Items.Add(_topMostMenuItem);
+        menu.Items.Add("Diagnostics...", null, delegate { ShowDiagnostics(); });
         menu.Items.Add("Settings...", null, delegate { ShowSettings(); });
         menu.Items.Add("Open config", null, delegate { Process.Start(MonitorConfig.ConfigPath); });
         menu.Items.Add("Exit", null, delegate { Close(); });
@@ -2768,6 +3124,11 @@ internal sealed class MainForm : Form
         {
             RestoreFromTray();
             ShowSettings();
+        });
+        menu.Items.Add("Diagnostics...", null, delegate
+        {
+            RestoreFromTray();
+            ShowDiagnostics();
         });
         menu.Items.Add(new ToolStripSeparator());
 
@@ -2833,11 +3194,19 @@ internal sealed class MainForm : Form
             }
 
             _timer.Interval = Math.Max(3, _config.pollIntervalSeconds) * 1000;
+            StartupRegistration.Sync(_config.startWithWindows);
+            ApplyTheme();
             SetTopMostEnabled(_config.alwaysOnTop, false);
             ApplyServiceVisibility(false);
+            ApplyCompactMode();
             SaveConfig();
             RefreshSnapshot();
         }
+    }
+
+    private void ShowDiagnostics()
+    {
+        MessageBox.Show(this, _lastDiagnosticsText, "Quota Monitor diagnostics", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void MinimizeWindow()
@@ -2974,8 +3343,10 @@ internal sealed class MainForm : Form
 
                     if (error != null)
                     {
-                        _status.ForeColor = Color.FromArgb(180, 55, 55);
+                        _status.ForeColor = _theme.Danger;
                         _status.Text = error.Message;
+                        _lastDiagnosticsText = "Refresh failed: " + error + Environment.NewLine +
+                            "Last successful refresh: " + FormatLocalDateTime(_lastSuccessfulRefreshAt);
                     }
                     else
                     {
@@ -2986,17 +3357,17 @@ internal sealed class MainForm : Form
                         RenderHistoryCharts();
                         UpdateTrayTooltip(snapshot);
                         var alertSummary = EvaluateAlerts(snapshot);
+                        _lastSuccessfulRefreshAt = snapshot.UpdatedAt;
+                        _lastDiagnosticsText = BuildDiagnostics(snapshot, alertSummary);
                         if (string.IsNullOrWhiteSpace(alertSummary))
                         {
-                            _status.ForeColor = Color.FromArgb(90, 96, 106);
-                            _status.Text = string.Format(
-                                CultureInfo.InvariantCulture,
-                                "Updated {0:HH:mm:ss}",
-                                snapshot.UpdatedAt.LocalDateTime);
+                            var hasIssues = HasServiceIssue(snapshot);
+                            _status.ForeColor = hasIssues ? _theme.Warning : _theme.MutedText;
+                            _status.Text = BuildStatusLine(snapshot, hasIssues);
                         }
                         else
                         {
-                            _status.ForeColor = Color.FromArgb(168, 86, 0);
+                            _status.ForeColor = _theme.Warning;
                             _status.Text = "Alert: " + alertSummary;
                         }
                         AppLog.Write("refresh ok");
@@ -3023,6 +3394,158 @@ internal sealed class MainForm : Form
                     HideToTray();
                 }
             });
+        }
+    }
+
+    private string BuildStatusLine(QuotaSnapshot snapshot, bool hasIssues)
+    {
+        var parts = new List<string>
+        {
+            string.Format(CultureInfo.InvariantCulture, "Updated {0:HH:mm:ss}", snapshot.UpdatedAt.LocalDateTime)
+        };
+
+        if (_config.CodexVisible)
+        {
+            parts.Add("Codex: " + ShortServiceState(snapshot.Codex.Available, snapshot.Codex.Source, snapshot.Codex.Error, snapshot.Codex.FallbackError));
+        }
+        if (_config.ClaudeVisible)
+        {
+            parts.Add("Claude: " + ShortServiceState(snapshot.Claude.Available, snapshot.Claude.Source, snapshot.Claude.Error, snapshot.Claude.FallbackError));
+        }
+        if (hasIssues)
+        {
+            parts.Add("Diagnostics available");
+        }
+
+        return string.Join(" | ", parts.ToArray());
+    }
+
+    private bool HasServiceIssue(QuotaSnapshot snapshot)
+    {
+        return (_config.CodexVisible &&
+                (!snapshot.Codex.Available || !string.IsNullOrWhiteSpace(snapshot.Codex.FallbackError))) ||
+            (_config.ClaudeVisible &&
+                (!snapshot.Claude.Available || !string.IsNullOrWhiteSpace(snapshot.Claude.FallbackError)));
+    }
+
+    private static string ShortServiceState(bool available, string source, string error, string fallbackError)
+    {
+        if (!available)
+        {
+            return SimplifyError(error);
+        }
+
+        var state = SimplifySource(source);
+        if (!string.IsNullOrWhiteSpace(fallbackError))
+        {
+            state += " fallback";
+        }
+
+        return state;
+    }
+
+    private static string SimplifySource(string source)
+    {
+        if (string.IsNullOrWhiteSpace(source))
+        {
+            return "unknown";
+        }
+        if (source.IndexOf("wham", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            source.IndexOf("oauth", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return "realtime";
+        }
+        if (source.IndexOf("local", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return "local";
+        }
+
+        return source;
+    }
+
+    private static string SimplifyError(string error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            return "no data";
+        }
+        if (error.IndexOf("auth", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            error.IndexOf("credentials", StringComparison.OrdinalIgnoreCase) >= 0 ||
+            error.IndexOf("token", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return "login needed";
+        }
+        if (error.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            return "path missing";
+        }
+
+        return error.Length > 28 ? error.Substring(0, 25) + "..." : error;
+    }
+
+    private string BuildDiagnostics(QuotaSnapshot snapshot, string alertSummary)
+    {
+        var lines = new List<string>
+        {
+            "Last successful refresh: " + FormatLocalDateTime(snapshot.UpdatedAt),
+            "Config: refresh " + _config.pollIntervalSeconds + "s, realtime API " + (_config.useRealtimeApi ? "on" : "off") +
+                ", theme " + MonitorConfig.NormalizeTheme(_config.theme) +
+                ", compact " + (_config.compactMode ? "on" : "off"),
+            "Alerts: " + (string.IsNullOrWhiteSpace(alertSummary) ? "none" : alertSummary),
+            "",
+            BuildCodexDiagnostics(snapshot.Codex),
+            "",
+            BuildClaudeDiagnostics(snapshot.Claude)
+        };
+
+        return string.Join(Environment.NewLine, lines.ToArray());
+    }
+
+    private static string BuildCodexDiagnostics(CodexSnapshot codex)
+    {
+        var lines = new List<string>
+        {
+            "Codex",
+            "  available: " + codex.Available,
+            "  source: " + (codex.Source ?? ""),
+            "  plan: " + FormatPlan(codex.PlanType),
+            "  5h remaining: " + FormatShortPercent(codex.Primary == null ? null : codex.Primary.RemainingPercent),
+            "  Week remaining: " + FormatShortPercent(codex.Secondary == null ? null : codex.Secondary.RemainingPercent)
+        };
+
+        AddDiagnosticLine(lines, "  error", codex.Error);
+        AddDiagnosticLine(lines, "  realtime fallback error", codex.FallbackError);
+        return string.Join(Environment.NewLine, lines.ToArray());
+    }
+
+    private static string BuildClaudeDiagnostics(ClaudeSnapshot claude)
+    {
+        var five = claude.RealtimeFiveHour == null
+            ? claude.RemainingTokenPercent ?? claude.RemainingMessagePercent
+            : claude.RealtimeFiveHour.RemainingPercent;
+        var week = claude.RealtimeWeek == null
+            ? claude.WeeklyRemainingTokenPercent ?? claude.WeeklyRemainingMessagePercent
+            : claude.RealtimeWeek.RemainingPercent;
+        var lines = new List<string>
+        {
+            "Claude",
+            "  available: " + claude.Available,
+            "  source: " + (claude.Source ?? ""),
+            "  plan: " + FormatPlan(claude.PlanType),
+            "  5h remaining: " + FormatShortPercent(five),
+            "  7d remaining: " + FormatShortPercent(week)
+        };
+
+        AddDiagnosticLine(lines, "  error", claude.Error);
+        AddDiagnosticLine(lines, "  realtime fallback error", claude.FallbackError);
+        return string.Join(Environment.NewLine, lines.ToArray());
+    }
+
+    private static void AddDiagnosticLine(List<string> lines, string label, string value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            lines.Add(label + ": " + value);
         }
     }
 
@@ -3429,6 +3952,16 @@ internal sealed class MainForm : Form
             "{0:HH:mm} ({1})",
             resetAt.Value.LocalDateTime,
             FormatDuration(remaining));
+    }
+
+    private static string FormatLocalDateTime(DateTimeOffset? value)
+    {
+        if (!value.HasValue)
+        {
+            return "--";
+        }
+
+        return value.Value.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
     }
 
     private static string FormatDuration(TimeSpan duration)
