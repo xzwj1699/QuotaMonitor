@@ -61,6 +61,10 @@ internal sealed class MonitorConfig
     public bool startAtTopRight { get; set; }
     public bool showCodex { get; set; }
     public bool showClaude { get; set; }
+    public bool minimizeToTray { get; set; }
+    public bool alertsEnabled { get; set; }
+    public double alertFiveHourRemainingPercent { get; set; }
+    public double alertLongWindowRemainingPercent { get; set; }
     public string codexSessionsPath { get; set; }
     public string codexAuthPath { get; set; }
     public string claudeProjectsPath { get; set; }
@@ -95,6 +99,10 @@ internal sealed class MonitorConfig
             startAtTopRight = true,
             showCodex = true,
             showClaude = true,
+            minimizeToTray = true,
+            alertsEnabled = true,
+            alertFiveHourRemainingPercent = 20,
+            alertLongWindowRemainingPercent = 30,
             codexSessionsPath = "%USERPROFILE%\\.codex\\sessions",
             codexAuthPath = "%USERPROFILE%\\.codex\\auth.json",
             claudeProjectsPath = "%USERPROFILE%\\.claude\\projects",
@@ -139,6 +147,27 @@ internal sealed class MonitorConfig
             {
                 config.showClaude = true;
             }
+            if (!raw.Contains("\"minimizeToTray\""))
+            {
+                config.minimizeToTray = true;
+            }
+            if (!raw.Contains("\"alertsEnabled\""))
+            {
+                config.alertsEnabled = true;
+            }
+            if (!raw.Contains("\"alertFiveHourRemainingPercent\""))
+            {
+                config.alertFiveHourRemainingPercent = 20;
+            }
+            if (!raw.Contains("\"alertLongWindowRemainingPercent\""))
+            {
+                config.alertLongWindowRemainingPercent = 30;
+            }
+
+            config.pollIntervalSeconds = Math.Max(3, config.pollIntervalSeconds);
+            config.realtimeApiTimeoutSeconds = Math.Max(3, config.realtimeApiTimeoutSeconds);
+            config.alertFiveHourRemainingPercent = ClampPercent(config.alertFiveHourRemainingPercent);
+            config.alertLongWindowRemainingPercent = ClampPercent(config.alertLongWindowRemainingPercent);
 
             return config;
         }
@@ -202,6 +231,16 @@ internal sealed class MonitorConfig
         }
 
         return expanded;
+    }
+
+    private static double ClampPercent(double value)
+    {
+        if (double.IsNaN(value) || double.IsInfinity(value))
+        {
+            return 0;
+        }
+
+        return Math.Max(0, Math.Min(100, value));
     }
 }
 
@@ -2000,6 +2039,226 @@ internal sealed class UsageHistoryChartControl : Control
     }
 }
 
+internal sealed class SettingsForm : Form
+{
+    private readonly CheckBox _showCodex;
+    private readonly CheckBox _showClaude;
+    private readonly CheckBox _alwaysOnTop;
+    private readonly CheckBox _minimizeToTray;
+    private readonly CheckBox _startAtTopRight;
+    private readonly CheckBox _useRealtimeApi;
+    private readonly CheckBox _alertsEnabled;
+    private readonly NumericUpDown _pollIntervalSeconds;
+    private readonly NumericUpDown _realtimeTimeoutSeconds;
+    private readonly NumericUpDown _fiveHourThreshold;
+    private readonly NumericUpDown _longWindowThreshold;
+
+    public SettingsForm(MonitorConfig config)
+    {
+        Text = "Settings";
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        StartPosition = FormStartPosition.CenterParent;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ShowInTaskbar = false;
+        ClientSize = new Size(430, 480);
+        BackColor = Color.FromArgb(248, 249, 250);
+        Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        AutoScaleMode = AutoScaleMode.Dpi;
+
+        _showCodex = new CheckBox();
+        _showClaude = new CheckBox();
+        _alwaysOnTop = new CheckBox();
+        _minimizeToTray = new CheckBox();
+        _startAtTopRight = new CheckBox();
+        _useRealtimeApi = new CheckBox();
+        _alertsEnabled = new CheckBox();
+        _pollIntervalSeconds = BuildNumber(3, 86400, 0);
+        _realtimeTimeoutSeconds = BuildNumber(3, 120, 0);
+        _fiveHourThreshold = BuildNumber(0, 100, 0);
+        _longWindowThreshold = BuildNumber(0, 100, 0);
+
+        _showCodex.Checked = config.CodexVisible;
+        _showClaude.Checked = config.ClaudeVisible;
+        _alwaysOnTop.Checked = config.alwaysOnTop;
+        _minimizeToTray.Checked = config.minimizeToTray;
+        _startAtTopRight.Checked = config.startAtTopRight;
+        _useRealtimeApi.Checked = config.useRealtimeApi;
+        _alertsEnabled.Checked = config.alertsEnabled;
+        _pollIntervalSeconds.Value = ClampDecimal(config.pollIntervalSeconds, _pollIntervalSeconds.Minimum, _pollIntervalSeconds.Maximum);
+        _realtimeTimeoutSeconds.Value = ClampDecimal(config.realtimeApiTimeoutSeconds, _realtimeTimeoutSeconds.Minimum, _realtimeTimeoutSeconds.Maximum);
+        _fiveHourThreshold.Value = ClampDecimal((decimal)config.alertFiveHourRemainingPercent, _fiveHourThreshold.Minimum, _fiveHourThreshold.Maximum);
+        _longWindowThreshold.Value = ClampDecimal((decimal)config.alertLongWindowRemainingPercent, _longWindowThreshold.Minimum, _longWindowThreshold.Maximum);
+
+        var root = new TableLayoutPanel();
+        root.Dock = DockStyle.Fill;
+        root.ColumnCount = 2;
+        root.Padding = new Padding(18, 16, 18, 14);
+        root.BackColor = BackColor;
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42));
+
+        AddSection(root, "Display");
+        AddCheck(root, _showCodex, "Show Codex");
+        AddCheck(root, _showClaude, "Show Claude");
+        AddCheck(root, _alwaysOnTop, "Always on top");
+        AddCheck(root, _minimizeToTray, "Minimize to system tray");
+        AddCheck(root, _startAtTopRight, "Start at top-right");
+
+        AddSection(root, "Refresh");
+        AddCheck(root, _useRealtimeApi, "Use realtime API");
+        AddNumber(root, "Refresh interval (seconds)", _pollIntervalSeconds);
+        AddNumber(root, "Realtime timeout (seconds)", _realtimeTimeoutSeconds);
+
+        AddSection(root, "Alerts");
+        AddCheck(root, _alertsEnabled, "Enable quota alerts");
+        AddNumber(root, "5h remaining threshold (%)", _fiveHourThreshold);
+        AddNumber(root, "Week/7d remaining threshold (%)", _longWindowThreshold);
+
+        var buttons = new FlowLayoutPanel();
+        buttons.FlowDirection = FlowDirection.RightToLeft;
+        buttons.Dock = DockStyle.Fill;
+        buttons.WrapContents = false;
+        buttons.Margin = new Padding(0, 12, 0, 0);
+
+        var okButton = new Button();
+        okButton.Text = "OK";
+        okButton.DialogResult = DialogResult.OK;
+        okButton.Size = new Size(92, 32);
+        StyleDialogButton(okButton, true);
+
+        var cancelButton = new Button();
+        cancelButton.Text = "Cancel";
+        cancelButton.DialogResult = DialogResult.Cancel;
+        cancelButton.Size = new Size(92, 32);
+        cancelButton.Margin = new Padding(8, 0, 0, 0);
+        StyleDialogButton(cancelButton, false);
+
+        buttons.Controls.Add(okButton);
+        buttons.Controls.Add(cancelButton);
+        AddFullWidth(root, buttons, 44);
+
+        AcceptButton = okButton;
+        CancelButton = cancelButton;
+        Controls.Add(root);
+
+        _alertsEnabled.CheckedChanged += delegate { SyncAlertControls(); };
+        SyncAlertControls();
+    }
+
+    public void ApplyTo(MonitorConfig config)
+    {
+        config.showCodex = _showCodex.Checked;
+        config.showClaude = _showClaude.Checked;
+        config.alwaysOnTop = _alwaysOnTop.Checked;
+        config.minimizeToTray = _minimizeToTray.Checked;
+        config.startAtTopRight = _startAtTopRight.Checked;
+        config.useRealtimeApi = _useRealtimeApi.Checked;
+        config.alertsEnabled = _alertsEnabled.Checked;
+        config.pollIntervalSeconds = (int)_pollIntervalSeconds.Value;
+        config.realtimeApiTimeoutSeconds = (int)_realtimeTimeoutSeconds.Value;
+        config.alertFiveHourRemainingPercent = (double)_fiveHourThreshold.Value;
+        config.alertLongWindowRemainingPercent = (double)_longWindowThreshold.Value;
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        if (DialogResult == DialogResult.OK && !_showCodex.Checked && !_showClaude.Checked)
+        {
+            MessageBox.Show(this, "Select at least Codex or Claude.", "Settings", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            e.Cancel = true;
+        }
+
+        base.OnFormClosing(e);
+    }
+
+    private void SyncAlertControls()
+    {
+        _fiveHourThreshold.Enabled = _alertsEnabled.Checked;
+        _longWindowThreshold.Enabled = _alertsEnabled.Checked;
+    }
+
+    private static NumericUpDown BuildNumber(decimal minimum, decimal maximum, int decimalPlaces)
+    {
+        var number = new NumericUpDown();
+        number.Minimum = minimum;
+        number.Maximum = maximum;
+        number.DecimalPlaces = decimalPlaces;
+        number.Increment = decimalPlaces == 0 ? 1 : 0.5M;
+        number.Dock = DockStyle.Left;
+        number.Width = 110;
+        number.TextAlign = HorizontalAlignment.Right;
+        number.Margin = new Padding(0, 2, 0, 2);
+        return number;
+    }
+
+    private static void AddSection(TableLayoutPanel root, string text)
+    {
+        var label = new Label();
+        label.Text = text;
+        label.Dock = DockStyle.Fill;
+        label.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold, GraphicsUnit.Point);
+        label.ForeColor = Color.FromArgb(24, 31, 40);
+        label.TextAlign = ContentAlignment.BottomLeft;
+        label.Margin = new Padding(0, 8, 0, 2);
+        AddFullWidth(root, label, 30);
+    }
+
+    private static void AddCheck(TableLayoutPanel root, CheckBox checkBox, string text)
+    {
+        checkBox.Text = text;
+        checkBox.Dock = DockStyle.Fill;
+        checkBox.AutoSize = false;
+        checkBox.TextAlign = ContentAlignment.MiddleLeft;
+        checkBox.Margin = new Padding(0, 2, 0, 2);
+        checkBox.ForeColor = Color.FromArgb(45, 52, 62);
+        AddFullWidth(root, checkBox, 28);
+    }
+
+    private static void AddNumber(TableLayoutPanel root, string text, NumericUpDown number)
+    {
+        var row = AddRow(root, 30);
+        var label = new Label();
+        label.Text = text;
+        label.Dock = DockStyle.Fill;
+        label.TextAlign = ContentAlignment.MiddleLeft;
+        label.ForeColor = Color.FromArgb(45, 52, 62);
+        label.Margin = new Padding(0, 2, 10, 2);
+        root.Controls.Add(label, 0, row);
+        root.Controls.Add(number, 1, row);
+    }
+
+    private static void AddFullWidth(TableLayoutPanel root, Control control, int height)
+    {
+        var row = AddRow(root, height);
+        root.Controls.Add(control, 0, row);
+        root.SetColumnSpan(control, 2);
+    }
+
+    private static int AddRow(TableLayoutPanel root, int height)
+    {
+        var row = root.RowStyles.Count;
+        root.RowCount = row + 1;
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+        return row;
+    }
+
+    private static decimal ClampDecimal(decimal value, decimal minimum, decimal maximum)
+    {
+        return Math.Max(minimum, Math.Min(maximum, value));
+    }
+
+    private static void StyleDialogButton(Button button, bool primary)
+    {
+        button.FlatStyle = FlatStyle.Flat;
+        button.FlatAppearance.BorderSize = 1;
+        button.FlatAppearance.BorderColor = primary ? Color.FromArgb(37, 120, 214) : Color.FromArgb(200, 205, 212);
+        button.BackColor = primary ? Color.FromArgb(224, 238, 255) : Color.FromArgb(244, 246, 249);
+        button.ForeColor = primary ? Color.FromArgb(24, 78, 148) : Color.FromArgb(35, 41, 48);
+        button.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+    }
+}
+
 internal sealed class MainForm : Form
 {
     private readonly MonitorConfig _config;
@@ -2023,12 +2282,17 @@ internal sealed class MainForm : Form
     private readonly Button _weekHistoryButton;
     private readonly Button _monthHistoryButton;
     private readonly FlowLayoutPanel _historyRangePanel;
+    private readonly HashSet<string> _shownAlertKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     private TableLayoutPanel _columns;
     private Control _codexColumn;
     private Control _claudeColumn;
+    private NotifyIcon _trayIcon;
     private ToolStripMenuItem _topMostMenuItem;
     private ToolStripMenuItem _showCodexMenuItem;
     private ToolStripMenuItem _showClaudeMenuItem;
+    private ToolStripMenuItem _trayTopMostMenuItem;
+    private ToolStripMenuItem _trayShowCodexMenuItem;
+    private ToolStripMenuItem _trayShowClaudeMenuItem;
     private volatile bool _refreshInProgress;
     private bool _syncingTopMostControl;
     private bool _syncingServiceMenu;
@@ -2080,6 +2344,7 @@ internal sealed class MainForm : Form
 
         BuildUi();
         BuildMenu();
+        BuildTrayIcon();
         PlaceWindow();
 
         _timer = new System.Windows.Forms.Timer();
@@ -2339,6 +2604,14 @@ internal sealed class MainForm : Form
             {
                 _showClaudeMenuItem.Checked = _config.ClaudeVisible;
             }
+            if (_trayShowCodexMenuItem != null)
+            {
+                _trayShowCodexMenuItem.Checked = _config.CodexVisible;
+            }
+            if (_trayShowClaudeMenuItem != null)
+            {
+                _trayShowClaudeMenuItem.Checked = _config.ClaudeVisible;
+            }
         }
         finally
         {
@@ -2427,7 +2700,7 @@ internal sealed class MainForm : Form
     {
         var menu = new ContextMenuStrip();
         menu.Items.Add("Refresh", null, delegate { RefreshSnapshot(); });
-        menu.Items.Add("Minimize", null, delegate { WindowState = FormWindowState.Minimized; });
+        menu.Items.Add("Minimize", null, delegate { MinimizeWindow(); });
         menu.Items.Add(new ToolStripSeparator());
         _showCodexMenuItem = new ToolStripMenuItem("Show Codex");
         _showCodexMenuItem.Checked = _config.CodexVisible;
@@ -2465,9 +2738,132 @@ internal sealed class MainForm : Form
             }
         };
         menu.Items.Add(_topMostMenuItem);
+        menu.Items.Add("Settings...", null, delegate { ShowSettings(); });
         menu.Items.Add("Open config", null, delegate { Process.Start(MonitorConfig.ConfigPath); });
         menu.Items.Add("Exit", null, delegate { Close(); });
         ContextMenuStrip = menu;
+    }
+
+    private void BuildTrayIcon()
+    {
+        var menu = new ContextMenuStrip();
+        menu.Items.Add("Show", null, delegate { RestoreFromTray(); });
+        menu.Items.Add("Refresh", null, delegate
+        {
+            RestoreFromTray();
+            RefreshSnapshot();
+        });
+        menu.Items.Add("Settings...", null, delegate
+        {
+            RestoreFromTray();
+            ShowSettings();
+        });
+        menu.Items.Add(new ToolStripSeparator());
+
+        _trayShowCodexMenuItem = new ToolStripMenuItem("Show Codex");
+        _trayShowCodexMenuItem.Checked = _config.CodexVisible;
+        _trayShowCodexMenuItem.CheckOnClick = true;
+        _trayShowCodexMenuItem.CheckedChanged += delegate
+        {
+            if (!_syncingServiceMenu)
+            {
+                SetServiceVisible("codex", _trayShowCodexMenuItem.Checked);
+            }
+        };
+        menu.Items.Add(_trayShowCodexMenuItem);
+
+        _trayShowClaudeMenuItem = new ToolStripMenuItem("Show Claude");
+        _trayShowClaudeMenuItem.Checked = _config.ClaudeVisible;
+        _trayShowClaudeMenuItem.CheckOnClick = true;
+        _trayShowClaudeMenuItem.CheckedChanged += delegate
+        {
+            if (!_syncingServiceMenu)
+            {
+                SetServiceVisible("claude", _trayShowClaudeMenuItem.Checked);
+            }
+        };
+        menu.Items.Add(_trayShowClaudeMenuItem);
+
+        _trayTopMostMenuItem = new ToolStripMenuItem("Topmost");
+        _trayTopMostMenuItem.Checked = _config.alwaysOnTop;
+        _trayTopMostMenuItem.CheckOnClick = true;
+        _trayTopMostMenuItem.CheckedChanged += delegate
+        {
+            if (!_syncingTopMostControl)
+            {
+                SetTopMostEnabled(_trayTopMostMenuItem.Checked, true);
+            }
+        };
+        menu.Items.Add(_trayTopMostMenuItem);
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Exit", null, delegate { Close(); });
+
+        _trayIcon = new NotifyIcon();
+        _trayIcon.Icon = Icon == null ? SystemIcons.Application : Icon;
+        _trayIcon.Text = "Quota Monitor";
+        _trayIcon.ContextMenuStrip = menu;
+        _trayIcon.Visible = true;
+        _trayIcon.DoubleClick += delegate { RestoreFromTray(); };
+    }
+
+    private void ShowSettings()
+    {
+        using (var dialog = new SettingsForm(_config))
+        {
+            if (dialog.ShowDialog(this) != DialogResult.OK)
+            {
+                return;
+            }
+
+            dialog.ApplyTo(_config);
+            if (!_config.CodexVisible && !_config.ClaudeVisible)
+            {
+                _config.showCodex = true;
+            }
+
+            _timer.Interval = Math.Max(3, _config.pollIntervalSeconds) * 1000;
+            SetTopMostEnabled(_config.alwaysOnTop, false);
+            ApplyServiceVisibility(false);
+            SaveConfig();
+            RefreshSnapshot();
+        }
+    }
+
+    private void MinimizeWindow()
+    {
+        if (_config.minimizeToTray)
+        {
+            HideToTray();
+            return;
+        }
+
+        WindowState = FormWindowState.Minimized;
+    }
+
+    private void HideToTray()
+    {
+        if (_trayIcon != null)
+        {
+            _trayIcon.Visible = true;
+        }
+
+        ShowInTaskbar = false;
+        WindowState = FormWindowState.Minimized;
+        Hide();
+    }
+
+    private void RestoreFromTray()
+    {
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        ShowInTaskbar = true;
+        Show();
+        WindowState = FormWindowState.Normal;
+        BringToFront();
+        Activate();
     }
 
     private void SetTopMostEnabled(bool enabled, bool persist)
@@ -2481,6 +2877,10 @@ internal sealed class MainForm : Form
             if (_topMostMenuItem != null)
             {
                 _topMostMenuItem.Checked = enabled;
+            }
+            if (_trayTopMostMenuItem != null)
+            {
+                _trayTopMostMenuItem.Checked = enabled;
             }
         }
         finally
@@ -2563,6 +2963,7 @@ internal sealed class MainForm : Form
 
                     if (error != null)
                     {
+                        _status.ForeColor = Color.FromArgb(180, 55, 55);
                         _status.Text = error.Message;
                     }
                     else
@@ -2572,10 +2973,21 @@ internal sealed class MainForm : Form
                         RenderClaude(snapshot.Claude);
                         RenderPaceCharts(snapshot);
                         RenderHistoryCharts();
-                        _status.Text = string.Format(
-                            CultureInfo.InvariantCulture,
-                            "Updated {0:HH:mm:ss}",
-                            snapshot.UpdatedAt.LocalDateTime);
+                        UpdateTrayTooltip(snapshot);
+                        var alertSummary = EvaluateAlerts(snapshot);
+                        if (string.IsNullOrWhiteSpace(alertSummary))
+                        {
+                            _status.ForeColor = Color.FromArgb(90, 96, 106);
+                            _status.Text = string.Format(
+                                CultureInfo.InvariantCulture,
+                                "Updated {0:HH:mm:ss}",
+                                snapshot.UpdatedAt.LocalDateTime);
+                        }
+                        else
+                        {
+                            _status.ForeColor = Color.FromArgb(168, 86, 0);
+                            _status.Text = "Alert: " + alertSummary;
+                        }
                         AppLog.Write("refresh ok");
                     }
                 }
@@ -2588,12 +3000,221 @@ internal sealed class MainForm : Form
         });
     }
 
+    protected override void OnResize(EventArgs e)
+    {
+        base.OnResize(e);
+        if (WindowState == FormWindowState.Minimized && _config.minimizeToTray)
+        {
+            BeginInvoke((MethodInvoker)delegate
+            {
+                if (!IsDisposed && WindowState == FormWindowState.Minimized && _config.minimizeToTray)
+                {
+                    HideToTray();
+                }
+            });
+        }
+    }
+
+    private string EvaluateAlerts(QuotaSnapshot snapshot)
+    {
+        if (!_config.alertsEnabled)
+        {
+            return null;
+        }
+
+        var activeAlerts = new List<string>();
+        var newAlerts = new List<string>();
+
+        if (_config.CodexVisible && snapshot.Codex.Available)
+        {
+            AddWindowAlert("Codex", "5h", snapshot.Codex.Primary, _config.alertFiveHourRemainingPercent, activeAlerts, newAlerts);
+            AddWindowAlert("Codex", "Week", snapshot.Codex.Secondary, _config.alertLongWindowRemainingPercent, activeAlerts, newAlerts);
+        }
+
+        if (_config.ClaudeVisible && snapshot.Claude.Available)
+        {
+            AddWindowAlert("Claude", "5h", snapshot.Claude.RealtimeFiveHour, _config.alertFiveHourRemainingPercent, activeAlerts, newAlerts);
+            AddWindowAlert("Claude", "7d", snapshot.Claude.RealtimeWeek, _config.alertLongWindowRemainingPercent, activeAlerts, newAlerts);
+
+            if (snapshot.Claude.RealtimeFiveHour == null)
+            {
+                AddRemainingAlert(
+                    "Claude",
+                    "5h",
+                    snapshot.Claude.RemainingTokenPercent ?? snapshot.Claude.RemainingMessagePercent,
+                    snapshot.Claude.EstimatedResetAt,
+                    _config.alertFiveHourRemainingPercent,
+                    activeAlerts,
+                    newAlerts);
+            }
+
+            if (snapshot.Claude.RealtimeWeek == null)
+            {
+                AddRemainingAlert(
+                    "Claude",
+                    "Week",
+                    snapshot.Claude.WeeklyRemainingTokenPercent ?? snapshot.Claude.WeeklyRemainingMessagePercent,
+                    snapshot.Claude.EstimatedWeeklyResetAt,
+                    _config.alertLongWindowRemainingPercent,
+                    activeAlerts,
+                    newAlerts);
+            }
+        }
+
+        if (newAlerts.Count > 0)
+        {
+            ShowQuotaAlert(newAlerts);
+        }
+
+        if (activeAlerts.Count == 0)
+        {
+            return null;
+        }
+
+        return string.Join("; ", activeAlerts.Take(3).ToArray()) + (activeAlerts.Count > 3 ? "; ..." : "");
+    }
+
+    private void AddWindowAlert(string service, string windowName, CodexWindow window, double threshold, List<string> activeAlerts, List<string> newAlerts)
+    {
+        if (window == null)
+        {
+            return;
+        }
+
+        AddRemainingAlert(service, windowName, window.RemainingPercent, window.ResetsAt, threshold, activeAlerts, newAlerts);
+    }
+
+    private void AddRemainingAlert(
+        string service,
+        string windowName,
+        double? remainingPercent,
+        DateTimeOffset? resetAt,
+        double threshold,
+        List<string> activeAlerts,
+        List<string> newAlerts)
+    {
+        if (!remainingPercent.HasValue || threshold <= 0)
+        {
+            return;
+        }
+
+        var remaining = Math.Max(0, Math.Min(100, remainingPercent.Value));
+        var prefix = service + "|" + windowName + "|";
+        if (remaining > threshold)
+        {
+            ClearAlertKeys(prefix);
+            return;
+        }
+
+        var summary = string.Format(
+            CultureInfo.InvariantCulture,
+            "{0} {1} {2:0}% left",
+            service,
+            windowName,
+            remaining);
+        activeAlerts.Add(summary);
+
+        var key = prefix +
+            (resetAt.HasValue ? resetAt.Value.UtcDateTime.ToString("o", CultureInfo.InvariantCulture) : "no-reset") +
+            "|" + threshold.ToString("0.##", CultureInfo.InvariantCulture);
+        if (!_shownAlertKeys.Contains(key))
+        {
+            _shownAlertKeys.Add(key);
+            newAlerts.Add(summary + " (threshold " + threshold.ToString("0", CultureInfo.InvariantCulture) + "%)");
+        }
+    }
+
+    private void ClearAlertKeys(string prefix)
+    {
+        var remove = _shownAlertKeys.Where(key => key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var key in remove)
+        {
+            _shownAlertKeys.Remove(key);
+        }
+    }
+
+    private void ShowQuotaAlert(List<string> newAlerts)
+    {
+        if (_trayIcon == null || newAlerts.Count == 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var message = string.Join(Environment.NewLine, newAlerts.Take(4).ToArray());
+            if (newAlerts.Count > 4)
+            {
+                message += Environment.NewLine + "...";
+            }
+
+            _trayIcon.ShowBalloonTip(8000, "Quota Monitor alert", message, ToolTipIcon.Warning);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Write("tray alert error: " + ex.Message);
+        }
+    }
+
+    private void UpdateTrayTooltip(QuotaSnapshot snapshot)
+    {
+        if (_trayIcon == null)
+        {
+            return;
+        }
+
+        var parts = new List<string>();
+        if (_config.CodexVisible && snapshot.Codex.Available)
+        {
+            parts.Add("Codex 5h " + FormatShortPercent(snapshot.Codex.Primary == null ? null : snapshot.Codex.Primary.RemainingPercent) +
+                " W " + FormatShortPercent(snapshot.Codex.Secondary == null ? null : snapshot.Codex.Secondary.RemainingPercent));
+        }
+
+        if (_config.ClaudeVisible && snapshot.Claude.Available)
+        {
+            var claudeFive = snapshot.Claude.RealtimeFiveHour == null
+                ? snapshot.Claude.RemainingTokenPercent ?? snapshot.Claude.RemainingMessagePercent
+                : snapshot.Claude.RealtimeFiveHour.RemainingPercent;
+            var claudeLong = snapshot.Claude.RealtimeWeek == null
+                ? snapshot.Claude.WeeklyRemainingTokenPercent ?? snapshot.Claude.WeeklyRemainingMessagePercent
+                : snapshot.Claude.RealtimeWeek.RemainingPercent;
+            parts.Add("Claude 5h " + FormatShortPercent(claudeFive) + " 7d " + FormatShortPercent(claudeLong));
+        }
+
+        var text = parts.Count == 0 ? "Quota Monitor" : "Quota: " + string.Join(" | ", parts.ToArray());
+        if (text.Length > 63)
+        {
+            text = text.Substring(0, 60) + "...";
+        }
+
+        try
+        {
+            _trayIcon.Text = text;
+        }
+        catch
+        {
+            _trayIcon.Text = "Quota Monitor";
+        }
+    }
+
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         try
         {
             _timer.Stop();
             _timer.Dispose();
+        }
+        catch
+        {
+        }
+
+        try
+        {
+            if (_trayIcon != null)
+            {
+                _trayIcon.Visible = false;
+                _trayIcon.Dispose();
+            }
         }
         catch
         {
@@ -2767,6 +3388,16 @@ internal sealed class MainForm : Form
         }
 
         return string.Format(CultureInfo.InvariantCulture, "{0:0}%", window.UsedPercent.Value);
+    }
+
+    private static string FormatShortPercent(double? value)
+    {
+        if (!value.HasValue)
+        {
+            return "--";
+        }
+
+        return string.Format(CultureInfo.InvariantCulture, "{0:0}%", value.Value);
     }
 
     private static string FormatReset(DateTimeOffset? resetAt)
