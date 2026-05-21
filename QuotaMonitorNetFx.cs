@@ -2267,21 +2267,43 @@ internal sealed class MainForm : Form
         _codexHistoryChart.Visible = showHistory;
         _claudeHistoryChart.Visible = showHistory;
 
-        StyleToggleButton(_paceModeButton, _chartMode == ChartMode.Pace);
-        StyleToggleButton(_historyModeButton, _chartMode == ChartMode.History);
-        StyleToggleButton(_dayHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Day);
-        StyleToggleButton(_weekHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Week);
-        StyleToggleButton(_monthHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Month);
+        StyleToggleButton(_paceModeButton, _chartMode == ChartMode.Pace, true);
+        StyleToggleButton(_historyModeButton, _chartMode == ChartMode.History, true);
+        StyleToggleButton(_dayHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Day, false);
+        StyleToggleButton(_weekHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Week, false);
+        StyleToggleButton(_monthHistoryButton, showHistory && _historyAggregation == HistoryAggregation.Month, false);
         _dayHistoryButton.Enabled = showHistory;
         _weekHistoryButton.Enabled = showHistory;
         _monthHistoryButton.Enabled = showHistory;
     }
 
-    private static void StyleToggleButton(Button button, bool selected)
+    private static void StyleToggleButton(Button button, bool selected, bool primary)
     {
-        button.FlatAppearance.BorderColor = selected ? Color.FromArgb(37, 120, 214) : Color.FromArgb(200, 205, 212);
-        button.BackColor = selected ? Color.FromArgb(224, 238, 255) : Color.FromArgb(244, 246, 249);
-        button.ForeColor = selected ? Color.FromArgb(24, 78, 148) : Color.FromArgb(52, 58, 66);
+        if (selected && primary)
+        {
+            button.FlatAppearance.BorderColor = Color.FromArgb(37, 120, 214);
+            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(216, 232, 252);
+            button.FlatAppearance.MouseDownBackColor = Color.FromArgb(204, 224, 249);
+            button.BackColor = Color.FromArgb(224, 238, 255);
+            button.ForeColor = Color.FromArgb(24, 78, 148);
+            return;
+        }
+
+        if (selected)
+        {
+            button.FlatAppearance.BorderColor = Color.FromArgb(142, 151, 164);
+            button.FlatAppearance.MouseOverBackColor = Color.FromArgb(226, 230, 236);
+            button.FlatAppearance.MouseDownBackColor = Color.FromArgb(216, 222, 230);
+            button.BackColor = Color.FromArgb(235, 239, 244);
+            button.ForeColor = Color.FromArgb(32, 38, 47);
+            return;
+        }
+
+        button.FlatAppearance.BorderColor = Color.FromArgb(200, 205, 212);
+        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(236, 240, 245);
+        button.FlatAppearance.MouseDownBackColor = Color.FromArgb(226, 232, 239);
+        button.BackColor = Color.FromArgb(244, 246, 249);
+        button.ForeColor = Color.FromArgb(52, 58, 66);
     }
 
     private void ApplyServiceVisibility(bool persist)
