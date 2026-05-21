@@ -1160,7 +1160,6 @@ internal sealed class UsageHistoryPoint
     public DateTime PeriodStart;
     public string Label;
     public double UsedPercent;
-    public double CumulativePercent;
 }
 
 internal static class UsageHistoryStore
@@ -1367,16 +1366,13 @@ internal static class UsageHistoryStore
         }
 
         var result = new List<UsageHistoryPoint>();
-        double cumulative = 0;
         foreach (var bucket in buckets)
         {
-            cumulative += bucket.Value;
             result.Add(new UsageHistoryPoint
             {
                 PeriodStart = bucket.Key,
                 Label = FormatBucketLabel(bucket.Key, aggregation),
-                UsedPercent = Math.Max(0, bucket.Value),
-                CumulativePercent = Math.Max(0, cumulative)
+                UsedPercent = Math.Max(0, bucket.Value)
             });
         }
 
@@ -1817,7 +1813,6 @@ internal sealed class UsageHistoryChartControl : Control
         var gridColor = Color.FromArgb(229, 233, 238);
         var axisColor = Color.FromArgb(111, 119, 132);
         var barColor = Color.FromArgb(92, 151, 224);
-        var lineColor = Color.FromArgb(37, 120, 214);
 
         using (var titleFont = new Font(Font, FontStyle.Bold))
         {
@@ -1869,36 +1864,11 @@ internal sealed class UsageHistoryChartControl : Control
             }
         }
 
-        var linePoints = new List<PointF>();
-        for (var i = 0; i < _points.Count; i++)
-        {
-            var point = _points[i];
-            var x = plot.Left + (float)(slotWidth * i + slotWidth / 2.0);
-            var y = plot.Bottom - (float)(plot.Height * Math.Max(0, point.CumulativePercent) / maxValue);
-            linePoints.Add(new PointF(x, y));
-        }
-
-        if (linePoints.Count >= 2)
-        {
-            using (var linePen = new Pen(lineColor, 2F))
-            {
-                g.DrawLines(linePen, linePoints.ToArray());
-            }
-        }
-
-        using (var pointBrush = new SolidBrush(lineColor))
-        {
-            foreach (var point in linePoints)
-            {
-                g.FillEllipse(pointBrush, point.X - 2, point.Y - 2, 4, 4);
-            }
-        }
-
         using (var legendFont = new Font(Font.FontFamily, 7.5F, FontStyle.Regular, GraphicsUnit.Point))
         {
             TextRenderer.DrawText(
                 g,
-                "bars: period  line: cumulative",
+                "usage per period",
                 legendFont,
                 new Rectangle(plot.Left, plot.Top + 3, plot.Width - 4, 16),
                 axisColor,
@@ -2010,7 +1980,6 @@ internal sealed class UsageHistoryChartControl : Control
         foreach (var point in points)
         {
             max = Math.Max(max, point.UsedPercent);
-            max = Math.Max(max, point.CumulativePercent);
         }
 
         return Math.Max(10, Math.Ceiling(max / 10.0) * 10.0);
@@ -2053,6 +2022,7 @@ internal sealed class MainForm : Form
     private readonly Button _dayHistoryButton;
     private readonly Button _weekHistoryButton;
     private readonly Button _monthHistoryButton;
+    private readonly FlowLayoutPanel _historyRangePanel;
     private TableLayoutPanel _columns;
     private Control _codexColumn;
     private Control _claudeColumn;
@@ -2106,6 +2076,7 @@ internal sealed class MainForm : Form
         _dayHistoryButton = new Button();
         _weekHistoryButton = new Button();
         _monthHistoryButton = new Button();
+        _historyRangePanel = new FlowLayoutPanel();
 
         BuildUi();
         BuildMenu();
@@ -2223,17 +2194,28 @@ internal sealed class MainForm : Form
         };
         toolbar.Controls.Add(_historyModeButton);
 
+        _historyRangePanel.Dock = DockStyle.None;
+        _historyRangePanel.FlowDirection = FlowDirection.LeftToRight;
+        _historyRangePanel.WrapContents = false;
+        _historyRangePanel.AutoSize = true;
+        _historyRangePanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+        _historyRangePanel.Height = 36;
+        _historyRangePanel.Margin = new Padding(10, 0, 0, 0);
+        _historyRangePanel.Padding = new Padding(0);
+        _historyRangePanel.BackColor = BackColor;
+
         ConfigureToggleButton(_dayHistoryButton, "Day", 64);
         _dayHistoryButton.Click += delegate { SetHistoryAggregation(HistoryAggregation.Day); };
-        toolbar.Controls.Add(_dayHistoryButton);
+        _historyRangePanel.Controls.Add(_dayHistoryButton);
 
         ConfigureToggleButton(_weekHistoryButton, "Week", 70);
         _weekHistoryButton.Click += delegate { SetHistoryAggregation(HistoryAggregation.Week); };
-        toolbar.Controls.Add(_weekHistoryButton);
+        _historyRangePanel.Controls.Add(_weekHistoryButton);
 
         ConfigureToggleButton(_monthHistoryButton, "Month", 76);
         _monthHistoryButton.Click += delegate { SetHistoryAggregation(HistoryAggregation.Month); };
-        toolbar.Controls.Add(_monthHistoryButton);
+        _historyRangePanel.Controls.Add(_monthHistoryButton);
+        toolbar.Controls.Add(_historyRangePanel);
 
         return toolbar;
     }
@@ -2266,6 +2248,7 @@ internal sealed class MainForm : Form
         _claudePaceChart.Visible = !showHistory;
         _codexHistoryChart.Visible = showHistory;
         _claudeHistoryChart.Visible = showHistory;
+        _historyRangePanel.Visible = showHistory;
 
         StyleToggleButton(_paceModeButton, _chartMode == ChartMode.Pace, true);
         StyleToggleButton(_historyModeButton, _chartMode == ChartMode.History, true);

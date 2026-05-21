@@ -10,7 +10,7 @@ A small Windows desktop monitor for Codex and Claude Code quota.
 - Subscription type display for each visible service.
 - Realtime API first, local-log fallback.
 - Week/7d usage pace chart: dashed ideal line vs actual recorded usage.
-- Day/week/month usage history chart: bars show period quota consumed, line shows cumulative consumed quota.
+- Day/week/month usage history chart: bars show period quota consumed.
 - Auto refresh every 5 minutes by default.
 - Resizable window, optional topmost mode, and standard minimize support.
 - No .NET SDK required; builds with the Windows built-in .NET Framework compiler.
@@ -29,7 +29,7 @@ Or:
 .\QuotaMonitor.exe
 ```
 
-Use the top controls to switch between `Pace` and `History`. In `History`, choose `Day`, `Week`, or `Month`.
+Use the chart controls to switch between `Pace` and `History`. When `History` is active, choose `Day`, `Week`, or `Month`.
 Right-click the window to switch Codex/Claude visibility, toggle topmost mode, refresh, minimize, or exit.
 
 ## Data Sources
