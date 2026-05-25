@@ -1120,6 +1120,7 @@ internal sealed class QuotaBarControl : Control
     private string _title = "";
     private string _detail = "";
     private double? _remainingPercent;
+    private bool _compactMode;
     private UiTheme _theme = UiThemes.Light;
 
     public QuotaBarControl()
@@ -1143,6 +1144,17 @@ internal sealed class QuotaBarControl : Control
         {
             using (var titleFont = new Font(Font, FontStyle.Bold))
             {
+                if (_compactMode)
+                {
+                    return Math.Max(
+                        38,
+                        UiScale.Scale(2) +
+                        UiScale.LineHeight(titleFont) +
+                        UiScale.Scale(3) +
+                        UiScale.Scale(8) +
+                        UiScale.Scale(3));
+                }
+
                 return Math.Max(
                     72,
                     UiScale.Scale(2) +
@@ -1154,6 +1166,18 @@ internal sealed class QuotaBarControl : Control
                     UiScale.Scale(4));
             }
         }
+    }
+
+    public void SetCompactMode(bool compactMode)
+    {
+        if (_compactMode == compactMode)
+        {
+            return;
+        }
+
+        _compactMode = compactMode;
+        MinimumSize = new Size(UiScale.Scale(220), PreferredControlHeight);
+        Invalidate();
     }
 
     public void SetTheme(UiTheme theme)
@@ -1188,6 +1212,12 @@ internal sealed class QuotaBarControl : Control
         var trackColor = _theme.Track;
         var fillColor = PickFillColor(_remainingPercent, _theme);
         var borderColor = _theme.Border;
+
+        if (_compactMode)
+        {
+            PaintCompact(g, titleColor, detailColor, trackColor, fillColor, borderColor);
+            return;
+        }
 
         var barHeight = UiScale.Scale(10);
         var barBottomPadding = UiScale.Scale(4);
@@ -1251,6 +1281,73 @@ internal sealed class QuotaBarControl : Control
             }
 
             g.DrawPath(borderPen, trackPath);
+        }
+    }
+
+    private void PaintCompact(Graphics g, Color titleColor, Color detailColor, Color trackColor, Color fillColor, Color borderColor)
+    {
+        var barHeight = UiScale.Scale(8);
+        var topPadding = UiScale.Scale(1);
+        using (var titleFont = new Font(Font, FontStyle.Bold))
+        {
+            var lineHeight = UiScale.LineHeight(titleFont);
+            var titleWidth = Math.Min(
+                Math.Max(UiScale.TextWidth(_title, titleFont) + UiScale.Scale(8), UiScale.Scale(80)),
+                Math.Max(1, Width / 2));
+            var titleBounds = new Rectangle(0, topPadding, titleWidth, lineHeight);
+            TextRenderer.DrawText(
+                g,
+                _title,
+                titleFont,
+                titleBounds,
+                titleColor,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+
+            var detailBounds = new Rectangle(
+                titleBounds.Right,
+                topPadding,
+                Math.Max(1, Width - titleBounds.Right),
+                lineHeight);
+            TextRenderer.DrawText(
+                g,
+                _detail,
+                Font,
+                detailBounds,
+                detailColor,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+
+            var barTop = Math.Min(Height - barHeight - UiScale.Scale(2), titleBounds.Bottom + UiScale.Scale(2));
+            var barRect = new Rectangle(0, Math.Max(0, barTop), Math.Max(1, Width - 1), Math.Max(1, barHeight));
+            using (var trackBrush = new SolidBrush(trackColor))
+            using (var fillBrush = new SolidBrush(fillColor))
+            using (var borderPen = new Pen(borderColor))
+            using (var trackPath = RoundedRect(barRect, UiScale.Scale(4)))
+            {
+                g.FillPath(trackBrush, trackPath);
+                if (_remainingPercent.HasValue)
+                {
+                    var fillWidth = (int)Math.Round(barRect.Width * _remainingPercent.Value / 100.0);
+                    if (fillWidth > 0)
+                    {
+                        var state = g.Save();
+                        try
+                        {
+                            g.SetClip(trackPath);
+                            var fillRect = new Rectangle(barRect.X, barRect.Y, Math.Min(fillWidth, barRect.Width), barRect.Height);
+                            using (var fillPath = RoundedRect(fillRect, UiScale.Scale(4)))
+                            {
+                                g.FillPath(fillBrush, fillPath);
+                            }
+                        }
+                        finally
+                        {
+                            g.Restore(state);
+                        }
+                    }
+                }
+
+                g.DrawPath(borderPen, trackPath);
+            }
         }
     }
 
@@ -2746,12 +2843,15 @@ internal sealed class MainForm : Form
     private ToolStripMenuItem _topMostMenuItem;
     private ToolStripMenuItem _showCodexMenuItem;
     private ToolStripMenuItem _showClaudeMenuItem;
+    private ToolStripMenuItem _compactModeMenuItem;
     private ToolStripMenuItem _trayTopMostMenuItem;
     private ToolStripMenuItem _trayShowCodexMenuItem;
     private ToolStripMenuItem _trayShowClaudeMenuItem;
+    private ToolStripMenuItem _trayCompactModeMenuItem;
     private volatile bool _refreshInProgress;
     private bool _syncingTopMostControl;
     private bool _syncingServiceMenu;
+    private bool _syncingCompactMenu;
     private DateTimeOffset? _lastSuccessfulRefreshAt;
     private string _lastDiagnosticsText = "No refresh completed yet.";
     private ChartMode _chartMode = ChartMode.Pace;
@@ -3016,6 +3116,7 @@ internal sealed class MainForm : Form
         MinimumSize = MainMinimumSize(compact);
         EnsureClientSizeForMode(compact);
         KeepWindowInWorkingArea();
+        SyncCompactMenus();
 
         ApplyChartMode();
         PerformLayout();
@@ -3065,19 +3166,54 @@ internal sealed class MainForm : Form
             return;
         }
 
+        var header = column.GetControlFromPosition(0, 0) as ServiceHeaderControl;
+        var first = column.GetControlFromPosition(0, 1) as QuotaBarControl;
+        var second = column.GetControlFromPosition(0, 2) as QuotaBarControl;
+        if (first != null)
+        {
+            first.SetCompactMode(compact);
+            first.Margin = compact ? new Padding(0) : UiScale.Padding(0, 0, 0, 1);
+        }
+        if (second != null)
+        {
+            second.SetCompactMode(compact);
+            second.Margin = compact ? new Padding(0) : UiScale.Padding(0, 1, 0, 0);
+        }
+
+        if (header != null)
+        {
+            column.RowStyles[0].SizeType = SizeType.Absolute;
+            column.RowStyles[0].Height = header.PreferredControlHeight;
+        }
+        if (first != null)
+        {
+            column.RowStyles[1].SizeType = SizeType.Absolute;
+            column.RowStyles[1].Height = first.PreferredControlHeight;
+        }
+        if (second != null)
+        {
+            column.RowStyles[2].SizeType = SizeType.Absolute;
+            column.RowStyles[2].Height = second.PreferredControlHeight;
+        }
+
         column.RowStyles[3].SizeType = compact ? SizeType.Absolute : SizeType.Percent;
         column.RowStyles[3].Height = compact ? 0 : 100;
-        column.Padding = compact ? UiScale.Padding(6, 3, 6, 4) : UiScale.Padding(6, 4, 6, 6);
+        column.Padding = compact ? UiScale.Padding(4, 2, 4, 3) : UiScale.Padding(6, 4, 6, 6);
+        var chartHost = column.GetControlFromPosition(0, 3);
+        if (chartHost != null)
+        {
+            chartHost.Margin = compact ? new Padding(0) : UiScale.Padding(0, 6, 0, 0);
+        }
     }
 
     private static Size MainClientSize(bool compact)
     {
-        return UiScale.FitToWorkingArea(compact ? new Size(720, 300) : new Size(960, 600), 48, 80);
+        return UiScale.FitToWorkingArea(compact ? new Size(720, 220) : new Size(960, 600), 48, 80);
     }
 
     private static Size MainMinimumSize(bool compact)
     {
-        return UiScale.FitToWorkingArea(compact ? new Size(560, 280) : new Size(780, 500), 64, 96);
+        return UiScale.FitToWorkingArea(compact ? new Size(560, 190) : new Size(780, 500), 64, 96);
     }
 
     private void EnsureClientSizeForMode(bool compact)
@@ -3266,6 +3402,36 @@ internal sealed class MainForm : Form
         RefreshSnapshot();
     }
 
+    private void SetCompactModeEnabled(bool enabled, bool persist)
+    {
+        _config.compactMode = enabled;
+        ApplyCompactMode();
+        if (persist)
+        {
+            SaveConfig();
+        }
+    }
+
+    private void SyncCompactMenus()
+    {
+        _syncingCompactMenu = true;
+        try
+        {
+            if (_compactModeMenuItem != null)
+            {
+                _compactModeMenuItem.Checked = _config.compactMode;
+            }
+            if (_trayCompactModeMenuItem != null)
+            {
+                _trayCompactModeMenuItem.Checked = _config.compactMode;
+            }
+        }
+        finally
+        {
+            _syncingCompactMenu = false;
+        }
+    }
+
     private static void StyleActionButton(Button button, UiTheme theme)
     {
         button.FlatStyle = FlatStyle.Flat;
@@ -3350,6 +3516,18 @@ internal sealed class MainForm : Form
         menu.Items.Add(_showClaudeMenuItem);
         menu.Items.Add(new ToolStripSeparator());
 
+        _compactModeMenuItem = new ToolStripMenuItem("Compact mode");
+        _compactModeMenuItem.Checked = _config.compactMode;
+        _compactModeMenuItem.CheckOnClick = true;
+        _compactModeMenuItem.CheckedChanged += delegate
+        {
+            if (!_syncingCompactMenu)
+            {
+                SetCompactModeEnabled(_compactModeMenuItem.Checked, true);
+            }
+        };
+        menu.Items.Add(_compactModeMenuItem);
+
         _topMostMenuItem = new ToolStripMenuItem("Topmost");
         _topMostMenuItem.Checked = _config.alwaysOnTop;
         _topMostMenuItem.CheckOnClick = true;
@@ -3424,6 +3602,18 @@ internal sealed class MainForm : Form
             }
         };
         menu.Items.Add(_trayTopMostMenuItem);
+
+        _trayCompactModeMenuItem = new ToolStripMenuItem("Compact mode");
+        _trayCompactModeMenuItem.Checked = _config.compactMode;
+        _trayCompactModeMenuItem.CheckOnClick = true;
+        _trayCompactModeMenuItem.CheckedChanged += delegate
+        {
+            if (!_syncingCompactMenu)
+            {
+                SetCompactModeEnabled(_trayCompactModeMenuItem.Checked, true);
+            }
+        };
+        menu.Items.Add(_trayCompactModeMenuItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add("Exit", null, delegate { Close(); });
 
