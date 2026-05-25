@@ -3149,13 +3149,27 @@ internal sealed class MainForm : Form
         _chartToolbar.Visible = !compact;
         _codexChartHost.Visible = !compact;
         _claudeChartHost.Visible = !compact;
+        _columns.Margin = compact ? new Padding(0) : UiScale.Padding(0, 0, 0, 4);
         _rootLayout.RowStyles[1].SizeType = SizeType.Absolute;
         _rootLayout.RowStyles[1].Height = compact ? 0 : ToolbarHeight();
         _rootLayout.RowStyles[2].SizeType = SizeType.Absolute;
         _rootLayout.RowStyles[2].Height = BottomBarHeight(compact);
         ApplyColumnCompactMode(_codexColumn, compact);
         ApplyColumnCompactMode(_claudeColumn, compact);
-        MinimumSize = MainMinimumSize(compact);
+        if (compact)
+        {
+            _rootLayout.RowStyles[0].SizeType = SizeType.Absolute;
+            _rootLayout.RowStyles[0].Height = CompactColumnsRowHeight();
+        }
+        else
+        {
+            _rootLayout.RowStyles[0].SizeType = SizeType.Percent;
+            _rootLayout.RowStyles[0].Height = 100;
+        }
+
+        MinimumSize = compact
+            ? UiScale.FitToWorkingArea(new Size(MainMinimumSize(true).Width, CompactClientHeightFromLayout()), 64, 96)
+            : MainMinimumSize(false);
         EnsureClientSizeForMode(compact);
         KeepWindowInWorkingArea();
         SyncCompactMenus();
@@ -3259,7 +3273,7 @@ internal sealed class MainForm : Form
 
     private static Size MainMinimumSize(bool compact)
     {
-        return UiScale.FitToWorkingArea(compact ? new Size(560, Math.Max(300, CompactClientHeight() - 24)) : new Size(780, 500), 64, 96);
+        return UiScale.FitToWorkingArea(compact ? new Size(560, CompactClientHeight()) : new Size(780, 500), 64, 96);
     }
 
     private static int CompactClientHeight()
@@ -3279,15 +3293,18 @@ internal sealed class MainForm : Form
             var rootPadding = UiScale.Scale(12);
             var columnsMargin = UiScale.Scale(4);
             var columnPadding = UiScale.Scale(5);
-            var safety = UiScale.Scale(12);
-            var contentHeight = rootPadding + columnsMargin + columnPadding + headerHeight + quotaHeight * 2 + BottomBarHeight(true) + safety;
-            return Math.Max(330, contentHeight);
+            return rootPadding + columnsMargin + columnPadding + headerHeight + quotaHeight * 2 + BottomBarHeight(true);
         }
     }
 
     private void EnsureClientSizeForMode(bool compact)
     {
-        var target = MainClientSize(compact);
+        var target = compact
+            ? UiScale.FitToWorkingArea(
+                new Size(Math.Max(ClientSize.Width, MainClientSize(true).Width), CompactClientHeightFromLayout()),
+                48,
+                80)
+            : MainClientSize(false);
         var current = ClientSize;
 
         if (compact)
@@ -3322,6 +3339,42 @@ internal sealed class MainForm : Form
         {
             Location = new Point(x, y);
         }
+    }
+
+    private int CompactClientHeightFromLayout()
+    {
+        if (_rootLayout == null || _columns == null)
+        {
+            return CompactClientHeight();
+        }
+
+        return _rootLayout.Padding.Vertical + CompactColumnsRowHeight() + BottomBarHeight(true);
+    }
+
+    private int CompactColumnsRowHeight()
+    {
+        if (_columns == null)
+        {
+            return Math.Max(0, CompactClientHeight() - BottomBarHeight(true));
+        }
+
+        return _columns.Margin.Vertical + Math.Max(
+            ServiceColumnContentHeight(_codexColumn),
+            ServiceColumnContentHeight(_claudeColumn));
+    }
+
+    private static int ServiceColumnContentHeight(TableLayoutPanel column)
+    {
+        if (column == null || column.RowStyles.Count < 3)
+        {
+            return 0;
+        }
+
+        return column.Margin.Vertical +
+            column.Padding.Vertical +
+            (int)Math.Ceiling(column.RowStyles[0].Height) +
+            (int)Math.Ceiling(column.RowStyles[1].Height) +
+            (int)Math.Ceiling(column.RowStyles[2].Height);
     }
 
     private static int ToolbarHeight()
