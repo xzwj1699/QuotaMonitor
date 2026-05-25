@@ -1044,6 +1044,7 @@ internal sealed class ServiceHeaderControl : Control
 {
     private readonly string _serviceName;
     private string _planText = "Plan: --";
+    private bool _compactMode;
     private UiTheme _theme = UiThemes.Light;
 
     public ServiceHeaderControl(string serviceName)
@@ -1064,11 +1065,28 @@ internal sealed class ServiceHeaderControl : Control
             using (var titleFont = new Font("Segoe UI", 12F, FontStyle.Bold, GraphicsUnit.Point))
             using (var planFont = new Font("Segoe UI", 8.25F, FontStyle.Regular, GraphicsUnit.Point))
             {
+                if (_compactMode)
+                {
+                    return Math.Max(30, UiScale.LineHeight(titleFont) + UiScale.Scale(2));
+                }
+
                 return Math.Max(
                     44,
                     UiScale.LineHeight(titleFont) + UiScale.LineHeight(planFont) + UiScale.Scale(4));
             }
         }
+    }
+
+    public void SetCompactMode(bool compactMode)
+    {
+        if (_compactMode == compactMode)
+        {
+            return;
+        }
+
+        _compactMode = compactMode;
+        MinimumSize = new Size(UiScale.Scale(120), PreferredControlHeight);
+        Invalidate();
     }
 
     public void SetPlan(string planText)
@@ -1095,6 +1113,28 @@ internal sealed class ServiceHeaderControl : Control
         using (var planFont = new Font("Segoe UI", 8.25F, FontStyle.Regular, GraphicsUnit.Point))
         {
             var titleHeight = UiScale.LineHeight(titleFont);
+            if (_compactMode)
+            {
+                var titleWidth = Math.Min(
+                    UiScale.TextWidth(_serviceName, titleFont) + UiScale.Scale(12),
+                    Math.Max(1, Width / 2));
+                TextRenderer.DrawText(
+                    g,
+                    _serviceName,
+                    titleFont,
+                    new Rectangle(0, 0, titleWidth, Height),
+                    _theme.Text,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                TextRenderer.DrawText(
+                    g,
+                    _planText,
+                    planFont,
+                    new Rectangle(titleWidth, 0, Math.Max(1, Width - titleWidth), Height),
+                    _theme.MutedText,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                return;
+            }
+
             TextRenderer.DrawText(
                 g,
                 _serviceName,
@@ -3169,6 +3209,10 @@ internal sealed class MainForm : Form
         var header = column.GetControlFromPosition(0, 0) as ServiceHeaderControl;
         var first = column.GetControlFromPosition(0, 1) as QuotaBarControl;
         var second = column.GetControlFromPosition(0, 2) as QuotaBarControl;
+        if (header != null)
+        {
+            header.SetCompactMode(compact);
+        }
         if (first != null)
         {
             first.SetCompactMode(compact);
