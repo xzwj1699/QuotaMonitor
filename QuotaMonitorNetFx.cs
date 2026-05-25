@@ -2976,7 +2976,7 @@ internal sealed class MainForm : Form
         _rootLayout.BackColor = BackColor;
         _rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         _rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, ToolbarHeight()));
-        _rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, BottomBarHeight()));
+        _rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, BottomBarHeight(_config.compactMode)));
 
         _columns = new TableLayoutPanel();
         _columns.Dock = DockStyle.Fill;
@@ -3151,6 +3151,8 @@ internal sealed class MainForm : Form
         _claudeChartHost.Visible = !compact;
         _rootLayout.RowStyles[1].SizeType = SizeType.Absolute;
         _rootLayout.RowStyles[1].Height = compact ? 0 : ToolbarHeight();
+        _rootLayout.RowStyles[2].SizeType = SizeType.Absolute;
+        _rootLayout.RowStyles[2].Height = BottomBarHeight(compact);
         ApplyColumnCompactMode(_codexColumn, compact);
         ApplyColumnCompactMode(_claudeColumn, compact);
         MinimumSize = MainMinimumSize(compact);
@@ -3252,12 +3254,35 @@ internal sealed class MainForm : Form
 
     private static Size MainClientSize(bool compact)
     {
-        return UiScale.FitToWorkingArea(compact ? new Size(720, 220) : new Size(960, 600), 48, 80);
+        return UiScale.FitToWorkingArea(compact ? new Size(720, CompactClientHeight()) : new Size(960, 600), 48, 80);
     }
 
     private static Size MainMinimumSize(bool compact)
     {
-        return UiScale.FitToWorkingArea(compact ? new Size(560, 190) : new Size(780, 500), 64, 96);
+        return UiScale.FitToWorkingArea(compact ? new Size(560, Math.Max(320, CompactClientHeight() - 24)) : new Size(780, 500), 64, 96);
+    }
+
+    private static int CompactClientHeight()
+    {
+        using (var headerFont = new Font("Segoe UI", 12F, FontStyle.Bold, GraphicsUnit.Point))
+        using (var quotaFont = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point))
+        using (var quotaTitleFont = new Font(quotaFont, FontStyle.Bold))
+        {
+            var headerHeight = Math.Max(30, UiScale.LineHeight(headerFont) + UiScale.Scale(2));
+            var quotaHeight = Math.Max(
+                38,
+                UiScale.Scale(2) +
+                UiScale.LineHeight(quotaTitleFont) +
+                UiScale.Scale(3) +
+                UiScale.Scale(8) +
+                UiScale.Scale(3));
+            var rootPadding = UiScale.Scale(12);
+            var columnsMargin = UiScale.Scale(4);
+            var columnPadding = UiScale.Scale(5);
+            var safety = UiScale.Scale(18);
+            var contentHeight = rootPadding + columnsMargin + columnPadding + headerHeight + quotaHeight * 2 + BottomBarHeight(true) + safety;
+            return Math.Max(360, contentHeight);
+        }
     }
 
     private void EnsureClientSizeForMode(bool compact)
@@ -3309,9 +3334,14 @@ internal sealed class MainForm : Form
 
     private static int BottomBarHeight()
     {
+        return BottomBarHeight(false);
+    }
+
+    private static int BottomBarHeight(bool compact)
+    {
         using (var font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point))
         {
-            return Math.Max(38, ButtonContentHeight(font) + UiScale.Scale(8));
+            return Math.Max(compact ? 34 : 38, ButtonContentHeight(font) + UiScale.Scale(compact ? 4 : 8));
         }
     }
 
