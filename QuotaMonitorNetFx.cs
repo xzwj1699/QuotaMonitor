@@ -2457,11 +2457,11 @@ internal sealed class SettingsForm : Form
         MinimizeBox = false;
         MaximizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = UiScale.FitToWorkingArea(UiScale.Size(560, 700), 48, 80);
-        AutoScroll = true;
         BackColor = Color.FromArgb(248, 249, 250);
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
-        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleMode = AutoScaleMode.None;
+        ClientSize = UiScale.FitToWorkingArea(UiScale.Size(560, 700), 48, 80);
+        AutoScroll = true;
 
         _showCodex = new CheckBox();
         _showClaude = new CheckBox();
@@ -2764,8 +2764,6 @@ internal sealed class MainForm : Form
         StartupRegistration.Sync(_config.startWithWindows);
 
         Text = "Quota Monitor";
-        ClientSize = MainClientSize(_config.compactMode);
-        MinimumSize = MainMinimumSize(_config.compactMode);
         FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = true;
         MaximizeBox = true;
@@ -2773,7 +2771,9 @@ internal sealed class MainForm : Form
         TopMost = _config.alwaysOnTop;
         BackColor = _theme.Background;
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
-        AutoScaleMode = AutoScaleMode.Dpi;
+        AutoScaleMode = AutoScaleMode.None;
+        ClientSize = MainClientSize(_config.compactMode);
+        MinimumSize = MainMinimumSize(_config.compactMode);
         try
         {
             Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
@@ -2812,6 +2812,8 @@ internal sealed class MainForm : Form
         _timer.Tick += delegate { RefreshSnapshot(); };
         Shown += delegate
         {
+            EnsureClientSizeForMode(_config.compactMode);
+            KeepWindowInWorkingArea();
             _codexFiveHour.SetData("5h", "Loading...", null);
             _codexWeek.SetData("Week", "Loading...", null);
             _claudeFiveHour.SetData("5h", "Loading...", null);
@@ -3012,14 +3014,8 @@ internal sealed class MainForm : Form
         ApplyColumnCompactMode(_codexColumn, compact);
         ApplyColumnCompactMode(_claudeColumn, compact);
         MinimumSize = MainMinimumSize(compact);
-        if (compact && Height > UiScale.Scale(360))
-        {
-            Height = MainClientSize(true).Height;
-        }
-        else if (!compact && Height < UiScale.Scale(560))
-        {
-            Height = MainClientSize(false).Height;
-        }
+        EnsureClientSizeForMode(compact);
+        KeepWindowInWorkingArea();
 
         ApplyChartMode();
         PerformLayout();
@@ -3082,6 +3078,45 @@ internal sealed class MainForm : Form
     private static Size MainMinimumSize(bool compact)
     {
         return UiScale.FitToWorkingArea(compact ? new Size(560, 280) : new Size(780, 500), 64, 96);
+    }
+
+    private void EnsureClientSizeForMode(bool compact)
+    {
+        var target = MainClientSize(compact);
+        var current = ClientSize;
+
+        if (compact)
+        {
+            var compactHeight = target.Height;
+            var compactWidth = Math.Max(current.Width, target.Width);
+            if (current.Height != compactHeight || current.Width < target.Width)
+            {
+                ClientSize = UiScale.FitToWorkingArea(new Size(compactWidth, compactHeight), 48, 80);
+            }
+
+            return;
+        }
+
+        if (current.Height < target.Height || current.Width < target.Width)
+        {
+            ClientSize = target;
+        }
+    }
+
+    private void KeepWindowInWorkingArea()
+    {
+        if (!IsHandleCreated)
+        {
+            return;
+        }
+
+        var area = Screen.FromControl(this).WorkingArea;
+        var x = Math.Min(Math.Max(Left, area.Left), Math.Max(area.Left, area.Right - Width));
+        var y = Math.Min(Math.Max(Top, area.Top), Math.Max(area.Top, area.Bottom - Height));
+        if (x != Left || y != Top)
+        {
+            Location = new Point(x, y);
+        }
     }
 
     private static int ToolbarHeight()
