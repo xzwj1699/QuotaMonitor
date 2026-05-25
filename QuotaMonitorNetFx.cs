@@ -3259,7 +3259,7 @@ internal sealed class MainForm : Form
 
     private static Size MainMinimumSize(bool compact)
     {
-        return UiScale.FitToWorkingArea(compact ? new Size(560, Math.Max(320, CompactClientHeight() - 24)) : new Size(780, 500), 64, 96);
+        return UiScale.FitToWorkingArea(compact ? new Size(560, Math.Max(300, CompactClientHeight() - 24)) : new Size(780, 500), 64, 96);
     }
 
     private static int CompactClientHeight()
@@ -3279,9 +3279,9 @@ internal sealed class MainForm : Form
             var rootPadding = UiScale.Scale(12);
             var columnsMargin = UiScale.Scale(4);
             var columnPadding = UiScale.Scale(5);
-            var safety = UiScale.Scale(18);
+            var safety = UiScale.Scale(12);
             var contentHeight = rootPadding + columnsMargin + columnPadding + headerHeight + quotaHeight * 2 + BottomBarHeight(true) + safety;
-            return Math.Max(360, contentHeight);
+            return Math.Max(330, contentHeight);
         }
     }
 
