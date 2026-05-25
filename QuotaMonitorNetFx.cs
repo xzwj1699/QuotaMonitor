@@ -1053,8 +1053,22 @@ internal sealed class ServiceHeaderControl : Control
         BackColor = _theme.Background;
         Dock = DockStyle.Fill;
         Margin = new Padding(0);
-        MinimumSize = new Size(120, 44);
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+        MinimumSize = new Size(UiScale.Scale(120), PreferredControlHeight);
+    }
+
+    public int PreferredControlHeight
+    {
+        get
+        {
+            using (var titleFont = new Font("Segoe UI", 12F, FontStyle.Bold, GraphicsUnit.Point))
+            using (var planFont = new Font("Segoe UI", 8.25F, FontStyle.Regular, GraphicsUnit.Point))
+            {
+                return Math.Max(
+                    44,
+                    UiScale.LineHeight(titleFont) + UiScale.LineHeight(planFont) + UiScale.Scale(4));
+            }
+        }
     }
 
     public void SetPlan(string planText)
@@ -1078,23 +1092,23 @@ internal sealed class ServiceHeaderControl : Control
         g.Clear(BackColor);
 
         using (var titleFont = new Font("Segoe UI", 12F, FontStyle.Bold, GraphicsUnit.Point))
+        using (var planFont = new Font("Segoe UI", 8.25F, FontStyle.Regular, GraphicsUnit.Point))
         {
+            var titleHeight = UiScale.LineHeight(titleFont);
             TextRenderer.DrawText(
                 g,
                 _serviceName,
                 titleFont,
-                new Rectangle(0, 0, Width, 25),
+                new Rectangle(0, 0, Width, titleHeight),
                 _theme.Text,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-        }
 
-        using (var planFont = new Font("Segoe UI", 8.25F, FontStyle.Regular, GraphicsUnit.Point))
-        {
+            var planTop = titleHeight + UiScale.Scale(2);
             TextRenderer.DrawText(
                 g,
                 _planText,
                 planFont,
-                new Rectangle(0, 25, Width, 18),
+                new Rectangle(0, planTop, Width, Math.Max(1, Height - planTop)),
                 _theme.MutedText,
                 TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
         }
@@ -1119,8 +1133,27 @@ internal sealed class QuotaBarControl : Control
             ControlStyles.ResizeRedraw,
             true);
         BackColor = _theme.Background;
-        MinimumSize = new Size(260, 72);
         Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point);
+        MinimumSize = new Size(UiScale.Scale(260), PreferredControlHeight);
+    }
+
+    public int PreferredControlHeight
+    {
+        get
+        {
+            using (var titleFont = new Font(Font, FontStyle.Bold))
+            {
+                return Math.Max(
+                    72,
+                    UiScale.Scale(2) +
+                    UiScale.LineHeight(titleFont) +
+                    UiScale.Scale(3) +
+                    UiScale.LineHeight(Font) +
+                    UiScale.Scale(6) +
+                    UiScale.Scale(10) +
+                    UiScale.Scale(4));
+            }
+        }
     }
 
     public void SetTheme(UiTheme theme)
@@ -1156,31 +1189,43 @@ internal sealed class QuotaBarControl : Control
         var fillColor = PickFillColor(_remainingPercent, _theme);
         var borderColor = _theme.Border;
 
-        var titleBounds = new Rectangle(0, 2, Width, 20);
-        var detailBounds = new Rectangle(0, 27, Width, 18);
+        var barHeight = UiScale.Scale(10);
+        var barBottomPadding = UiScale.Scale(4);
+        var barTop = Math.Max(0, Height - barBottomPadding - barHeight);
+        var textBottom = Math.Max(0, barTop - UiScale.Scale(6));
+        var topPadding = UiScale.Scale(2);
         using (var titleFont = new Font(Font, FontStyle.Bold))
         {
+            var titleHeight = Math.Min(UiScale.LineHeight(titleFont), Math.Max(0, textBottom - topPadding));
+            var titleBounds = new Rectangle(0, topPadding, Width, titleHeight);
             TextRenderer.DrawText(
                 g,
                 _title,
                 titleFont,
                 titleBounds,
                 titleColor,
-                TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
-        }
-        TextRenderer.DrawText(
-            g,
-            _detail,
-            Font,
-            detailBounds,
-            detailColor,
-            TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
 
-        var barRect = new Rectangle(0, Height - 15, Math.Max(1, Width - 1), 10);
+            var detailTop = titleBounds.Bottom + UiScale.Scale(3);
+            var detailHeight = Math.Min(UiScale.LineHeight(Font), Math.Max(0, textBottom - detailTop));
+            if (detailHeight > 0)
+            {
+                var detailBounds = new Rectangle(0, detailTop, Width, detailHeight);
+                TextRenderer.DrawText(
+                    g,
+                    _detail,
+                    Font,
+                    detailBounds,
+                    detailColor,
+                    TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            }
+        }
+
+        var barRect = new Rectangle(0, barTop, Math.Max(1, Width - 1), Math.Max(1, barHeight));
         using (var trackBrush = new SolidBrush(trackColor))
         using (var fillBrush = new SolidBrush(fillColor))
         using (var borderPen = new Pen(borderColor))
-        using (var trackPath = RoundedRect(barRect, 4))
+        using (var trackPath = RoundedRect(barRect, UiScale.Scale(4)))
         {
             g.FillPath(trackBrush, trackPath);
             if (_remainingPercent.HasValue)
@@ -1193,7 +1238,7 @@ internal sealed class QuotaBarControl : Control
                     {
                         g.SetClip(trackPath);
                         var fillRect = new Rectangle(barRect.X, barRect.Y, Math.Min(fillWidth, barRect.Width), barRect.Height);
-                        using (var fillPath = RoundedRect(fillRect, 4))
+                        using (var fillPath = RoundedRect(fillRect, UiScale.Scale(4)))
                         {
                             g.FillPath(fillBrush, fillPath);
                         }
@@ -1305,6 +1350,101 @@ internal static class NativeMethods
         }
         catch
         {
+        }
+    }
+}
+
+internal static class UiScale
+{
+    private static readonly float DpiScale = DetectDpiScale();
+
+    public static float Factor
+    {
+        get { return DpiScale; }
+    }
+
+    public static int Scale(int value)
+    {
+        if (value == 0)
+        {
+            return 0;
+        }
+
+        if (value < 0)
+        {
+            return -Scale(-value);
+        }
+
+        return Math.Max(1, (int)Math.Round(value * DpiScale));
+    }
+
+    public static float Scale(float value)
+    {
+        return value * DpiScale;
+    }
+
+    public static Size Size(int width, int height)
+    {
+        return new Size(Scale(width), Scale(height));
+    }
+
+    public static Padding Padding(int all)
+    {
+        return new Padding(Scale(all));
+    }
+
+    public static Padding Padding(int left, int top, int right, int bottom)
+    {
+        return new Padding(Scale(left), Scale(top), Scale(right), Scale(bottom));
+    }
+
+    public static int LineHeight(Font font)
+    {
+        var measured = TextRenderer.MeasureText(
+            "Mg",
+            font,
+            new Size(1000, 1000),
+            TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+        return Math.Max(1, measured.Height + Scale(2));
+    }
+
+    public static int TextWidth(string text, Font font)
+    {
+        var measured = TextRenderer.MeasureText(
+            string.IsNullOrEmpty(text) ? "Mg" : text,
+            font,
+            new Size(1000, 1000),
+            TextFormatFlags.SingleLine | TextFormatFlags.NoPadding);
+        return Math.Max(1, measured.Width);
+    }
+
+    public static Size FitToWorkingArea(Size requested, int horizontalMargin, int verticalMargin)
+    {
+        try
+        {
+            var area = Screen.PrimaryScreen.WorkingArea;
+            var maxWidth = Math.Max(360, area.Width - Scale(horizontalMargin));
+            var maxHeight = Math.Max(220, area.Height - Scale(verticalMargin));
+            return new Size(Math.Min(requested.Width, maxWidth), Math.Min(requested.Height, maxHeight));
+        }
+        catch
+        {
+            return requested;
+        }
+    }
+
+    private static float DetectDpiScale()
+    {
+        try
+        {
+            using (var graphics = Graphics.FromHwnd(IntPtr.Zero))
+            {
+                return Math.Max(1.0F, graphics.DpiX / 96.0F);
+            }
+        }
+        catch
+        {
+            return 1.0F;
         }
     }
 }
@@ -1686,8 +1826,8 @@ internal sealed class UsagePaceChartControl : Control
         ResizeRedraw = true;
         BackColor = _theme.Background;
         Dock = DockStyle.Fill;
-        Margin = new Padding(0, 8, 0, 6);
-        MinimumSize = new Size(260, 160);
+        Margin = UiScale.Padding(0, 4, 0, 2);
+        MinimumSize = new Size(260, 150);
         Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point);
     }
 
@@ -1734,30 +1874,38 @@ internal sealed class UsagePaceChartControl : Control
 
         using (var titleFont = new Font(Font, FontStyle.Bold))
         {
+            var titleHeight = UiScale.LineHeight(titleFont);
             TextRenderer.DrawText(
                 g,
                 BuildTitle(),
                 titleFont,
-                new Rectangle(0, 1, Width - 8, 20),
+                new Rectangle(0, 0, Math.Max(1, Width - UiScale.Scale(8)), titleHeight),
                 _theme.Text,
-                TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
         }
 
+        var predictionTop = UiScale.LineHeight(Font);
         TextRenderer.DrawText(
             g,
             BuildPredictionText(),
             Font,
-            new Rectangle(0, 20, Width - 8, 18),
+            new Rectangle(0, predictionTop, Math.Max(1, Width - UiScale.Scale(8)), UiScale.LineHeight(Font)),
             axisColor,
-            TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
 
         if (!_resetAt.HasValue || _windowMinutes <= 0)
         {
-            TextRenderer.DrawText(g, "No pace data yet", Font, plot, _theme.MutedText);
+            TextRenderer.DrawText(
+                g,
+                "No pace data yet",
+                Font,
+                plot,
+                _theme.MutedText,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             return;
         }
 
-        if (plot.Width < 24 || plot.Height < 24)
+        if (plot.Width < UiScale.Scale(24) || plot.Height < UiScale.Scale(24))
         {
             return;
         }
@@ -1774,7 +1922,7 @@ internal sealed class UsagePaceChartControl : Control
         var nowX = Clamp01((now - windowStart).TotalMinutes / _windowMinutes);
         DrawAxes(g, plot, windowStart, _resetAt.Value, axisColor, gridColor);
 
-        using (var idealPen = new Pen(idealColor, 1.5F))
+        using (var idealPen = new Pen(idealColor, UiScale.Scale(1.5F)))
         {
             idealPen.DashStyle = DashStyle.Dash;
             g.DrawLine(idealPen, PointFor(plot, 0, 0), PointFor(plot, 1, 100));
@@ -1799,25 +1947,32 @@ internal sealed class UsagePaceChartControl : Control
 
         if (points.Count >= 2)
         {
-            using (var actualPen = new Pen(actualColor, 2.0F))
+            using (var actualPen = new Pen(actualColor, UiScale.Scale(2.0F)))
             {
                 g.DrawLines(actualPen, points.ToArray());
             }
         }
+        var pointRadius = UiScale.Scale(2);
         foreach (var point in points.Take(Math.Max(0, points.Count - 12)).Concat(points.Skip(Math.Max(0, points.Count - 12))))
         {
             using (var brush = new SolidBrush(actualColor))
             {
-                g.FillEllipse(brush, point.X - 2, point.Y - 2, 4, 4);
+                g.FillEllipse(brush, point.X - pointRadius, point.Y - pointRadius, pointRadius * 2, pointRadius * 2);
             }
         }
 
-        using (var nowPen = new Pen(_theme.Border, 1F))
+        using (var nowPen = new Pen(_theme.Border, UiScale.Scale(1F)))
         {
             g.DrawLine(nowPen, plot.Left + (float)(plot.Width * nowX), plot.Top, plot.Left + (float)(plot.Width * nowX), plot.Bottom);
         }
 
-        var idealLabel = new Rectangle(plot.Right - 74, plot.Top + 8, 64, 18);
+        var idealLabelWidth = UiScale.TextWidth("ideal", Font) + UiScale.Scale(8);
+        var idealLabelHeight = UiScale.LineHeight(Font);
+        var idealLabel = new Rectangle(
+            plot.Right - idealLabelWidth - UiScale.Scale(6),
+            plot.Top + UiScale.Scale(8),
+            idealLabelWidth,
+            idealLabelHeight);
         using (var labelBack = new SolidBrush(BackColor))
         {
             g.FillRectangle(labelBack, idealLabel);
@@ -1834,39 +1989,44 @@ internal sealed class UsagePaceChartControl : Control
 
     private Rectangle CalculatePlotRectangle()
     {
-        const int leftMargin = 50;
-        const int topMargin = 52;
-        const int rightMargin = 10;
-        const int bottomMargin = 30;
-        var available = new Rectangle(
-            leftMargin,
-            topMargin,
-            Math.Max(1, Width - leftMargin - rightMargin),
-            Math.Max(1, Height - topMargin - bottomMargin));
-
-        var plotWidth = available.Width;
-        var plotHeight = available.Height;
-        var aspect = plotWidth / (double)plotHeight;
-        const double minAspect = 1.25;
-        const double maxAspect = 2.45;
-
-        if (aspect < minAspect)
+        using (var titleFont = new Font(Font, FontStyle.Bold))
+        using (var labelFont = new Font(Font.FontFamily, 7.5F, FontStyle.Regular, GraphicsUnit.Point))
         {
-            plotHeight = Math.Max(24, (int)Math.Round(plotWidth / minAspect));
-        }
-        else if (aspect > maxAspect)
-        {
-            plotWidth = Math.Max(24, (int)Math.Round(plotHeight * maxAspect));
-        }
+            var leftMargin = Math.Max(UiScale.Scale(50), UiScale.TextWidth("100%", labelFont) + UiScale.Scale(10));
+            var topMargin = UiScale.LineHeight(titleFont) + UiScale.LineHeight(Font) + UiScale.Scale(12);
+            var rightMargin = UiScale.Scale(10);
+            var bottomMargin = UiScale.LineHeight(labelFont) + UiScale.Scale(12);
 
-        plotWidth = Math.Min(plotWidth, available.Width);
-        plotHeight = Math.Min(plotHeight, available.Height);
+            var available = new Rectangle(
+                leftMargin,
+                topMargin,
+                Math.Max(1, Width - leftMargin - rightMargin),
+                Math.Max(1, Height - topMargin - bottomMargin));
 
-        return new Rectangle(
-            available.Left + (available.Width - plotWidth) / 2,
-            available.Top + (available.Height - plotHeight) / 3,
-            plotWidth,
-            plotHeight);
+            var plotWidth = available.Width;
+            var plotHeight = available.Height;
+            var aspect = plotWidth / (double)plotHeight;
+            const double minAspect = 1.25;
+            const double maxAspect = 2.45;
+
+            if (aspect < minAspect)
+            {
+                plotHeight = Math.Max(UiScale.Scale(24), (int)Math.Round(plotWidth / minAspect));
+            }
+            else if (aspect > maxAspect)
+            {
+                plotWidth = Math.Max(UiScale.Scale(24), (int)Math.Round(plotHeight * maxAspect));
+            }
+
+            plotWidth = Math.Min(plotWidth, available.Width);
+            plotHeight = Math.Min(plotHeight, available.Height);
+
+            return new Rectangle(
+                available.Left + (available.Width - plotWidth) / 2,
+                available.Top + (available.Height - plotHeight) / 3,
+                plotWidth,
+                plotHeight);
+        }
     }
 
     private void DrawAxes(Graphics g, Rectangle plot, DateTimeOffset windowStart, DateTimeOffset resetAt, Color axisColor, Color gridColor)
@@ -1878,7 +2038,9 @@ internal sealed class UsagePaceChartControl : Control
             DrawYLabel(g, labelFont, plot, 50, axisColor, tickPen);
             DrawYLabel(g, labelFont, plot, 0, axisColor, tickPen);
 
-            var labelTop = plot.Bottom + 4;
+            var labelTop = plot.Bottom + UiScale.Scale(4);
+            var labelWidth = Math.Max(UiScale.Scale(92), UiScale.TextWidth("00/00 00:00", labelFont) + UiScale.Scale(8));
+            var labelHeight = UiScale.LineHeight(labelFont);
             var windowMiddle = windowStart.AddTicks((resetAt - windowStart).Ticks / 2);
             var startText = FormatAxisTime(windowStart);
             var middleText = FormatAxisTime(windowMiddle);
@@ -1888,18 +2050,18 @@ internal sealed class UsagePaceChartControl : Control
                 g,
                 startText,
                 labelFont,
-                new Rectangle(plot.Left - 2, labelTop, 92, 18),
+                new Rectangle(plot.Left - UiScale.Scale(2), labelTop, labelWidth, labelHeight),
                 axisColor,
                 TextFormatFlags.Left | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
 
-            if (plot.Width >= 260)
+            if (plot.Width >= labelWidth * 3)
             {
-                g.DrawLine(tickPen, plot.Left + plot.Width / 2, plot.Bottom, plot.Left + plot.Width / 2, plot.Bottom + 4);
+                g.DrawLine(tickPen, plot.Left + plot.Width / 2, plot.Bottom, plot.Left + plot.Width / 2, plot.Bottom + UiScale.Scale(4));
                 TextRenderer.DrawText(
                     g,
                     middleText,
                     labelFont,
-                    new Rectangle(plot.Left + plot.Width / 2 - 46, labelTop, 92, 18),
+                    new Rectangle(plot.Left + plot.Width / 2 - labelWidth / 2, labelTop, labelWidth, labelHeight),
                     axisColor,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
             }
@@ -1908,7 +2070,7 @@ internal sealed class UsagePaceChartControl : Control
                 g,
                 resetText,
                 labelFont,
-                new Rectangle(plot.Right - 92, labelTop, 92, 18),
+                new Rectangle(plot.Right - labelWidth, labelTop, labelWidth, labelHeight),
                 axisColor,
                 TextFormatFlags.Right | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
         }
@@ -1917,12 +2079,13 @@ internal sealed class UsagePaceChartControl : Control
     private static void DrawYLabel(Graphics g, Font labelFont, Rectangle plot, int percent, Color axisColor, Pen tickPen)
     {
         var y = plot.Bottom - (int)Math.Round(plot.Height * percent / 100.0);
-        g.DrawLine(tickPen, plot.Left - 4, y, plot.Left, y);
+        g.DrawLine(tickPen, plot.Left - UiScale.Scale(4), y, plot.Left, y);
+        var labelHeight = UiScale.LineHeight(labelFont);
         TextRenderer.DrawText(
             g,
             percent.ToString(CultureInfo.InvariantCulture) + "%",
             labelFont,
-            new Rectangle(0, y - 8, plot.Left - 9, 16),
+            new Rectangle(0, y - labelHeight / 2, Math.Max(1, plot.Left - UiScale.Scale(9)), labelHeight),
             axisColor,
             TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoClipping);
     }
@@ -2034,7 +2197,7 @@ internal sealed class UsageHistoryChartControl : Control
         ResizeRedraw = true;
         BackColor = _theme.Background;
         Dock = DockStyle.Fill;
-        MinimumSize = new Size(260, 160);
+        MinimumSize = new Size(260, 150);
         Font = new Font("Segoe UI", 8F, FontStyle.Regular, GraphicsUnit.Point);
     }
 
@@ -2070,16 +2233,17 @@ internal sealed class UsageHistoryChartControl : Control
 
         using (var titleFont = new Font(Font, FontStyle.Bold))
         {
+            var titleHeight = UiScale.LineHeight(titleFont);
             TextRenderer.DrawText(
                 g,
                 _title + " - " + AggregationLabel(_aggregation),
                 titleFont,
-                new Rectangle(0, 1, Width - 8, 20),
+                new Rectangle(0, 0, Math.Max(1, Width - UiScale.Scale(8)), titleHeight),
                 _theme.Text,
-                TextFormatFlags.Left | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
         }
 
-        if (plot.Width < 24 || plot.Height < 24)
+        if (plot.Width < UiScale.Scale(24) || plot.Height < UiScale.Scale(24))
         {
             return;
         }
@@ -2096,12 +2260,18 @@ internal sealed class UsageHistoryChartControl : Control
 
         if (_points.Count == 0)
         {
-            TextRenderer.DrawText(g, "No history yet", Font, plot, _theme.MutedText);
+            TextRenderer.DrawText(
+                g,
+                "No history yet",
+                Font,
+                plot,
+                _theme.MutedText,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
             return;
         }
 
         var slotWidth = plot.Width / (double)Math.Max(1, _points.Count);
-        var barWidth = Math.Max(3, Math.Min(26, (int)Math.Round(slotWidth * 0.52)));
+        var barWidth = Math.Max(UiScale.Scale(3), Math.Min(UiScale.Scale(26), (int)Math.Round(slotWidth * 0.52)));
         using (var barBrush = new SolidBrush(Color.FromArgb(150, barColor)))
         {
             for (var i = 0; i < _points.Count; i++)
@@ -2124,47 +2294,52 @@ internal sealed class UsageHistoryChartControl : Control
                 g,
                 "usage per period",
                 legendFont,
-                new Rectangle(plot.Left, plot.Top + 3, plot.Width - 4, 16),
+                new Rectangle(plot.Left, plot.Top + UiScale.Scale(3), Math.Max(1, plot.Width - UiScale.Scale(4)), UiScale.LineHeight(legendFont)),
                 axisColor,
-                TextFormatFlags.Right | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
+                TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
         }
     }
 
     private Rectangle CalculatePlotRectangle()
     {
-        const int leftMargin = 50;
-        const int topMargin = 34;
-        const int rightMargin = 10;
-        const int bottomMargin = 30;
-        var available = new Rectangle(
-            leftMargin,
-            topMargin,
-            Math.Max(1, Width - leftMargin - rightMargin),
-            Math.Max(1, Height - topMargin - bottomMargin));
-
-        var plotWidth = available.Width;
-        var plotHeight = available.Height;
-        var aspect = plotWidth / (double)plotHeight;
-        const double minAspect = 1.25;
-        const double maxAspect = 2.45;
-
-        if (aspect < minAspect)
+        using (var titleFont = new Font(Font, FontStyle.Bold))
+        using (var labelFont = new Font(Font.FontFamily, 7.5F, FontStyle.Regular, GraphicsUnit.Point))
         {
-            plotHeight = Math.Max(24, (int)Math.Round(plotWidth / minAspect));
-        }
-        else if (aspect > maxAspect)
-        {
-            plotWidth = Math.Max(24, (int)Math.Round(plotHeight * maxAspect));
-        }
+            var leftMargin = Math.Max(UiScale.Scale(50), UiScale.TextWidth("100%", labelFont) + UiScale.Scale(10));
+            var topMargin = UiScale.LineHeight(titleFont) + UiScale.Scale(12);
+            var rightMargin = UiScale.Scale(10);
+            var bottomMargin = UiScale.LineHeight(labelFont) + UiScale.Scale(12);
 
-        plotWidth = Math.Min(plotWidth, available.Width);
-        plotHeight = Math.Min(plotHeight, available.Height);
+            var available = new Rectangle(
+                leftMargin,
+                topMargin,
+                Math.Max(1, Width - leftMargin - rightMargin),
+                Math.Max(1, Height - topMargin - bottomMargin));
 
-        return new Rectangle(
-            available.Left + (available.Width - plotWidth) / 2,
-            available.Top + (available.Height - plotHeight) / 3,
-            plotWidth,
-            plotHeight);
+            var plotWidth = available.Width;
+            var plotHeight = available.Height;
+            var aspect = plotWidth / (double)plotHeight;
+            const double minAspect = 1.25;
+            const double maxAspect = 2.45;
+
+            if (aspect < minAspect)
+            {
+                plotHeight = Math.Max(UiScale.Scale(24), (int)Math.Round(plotWidth / minAspect));
+            }
+            else if (aspect > maxAspect)
+            {
+                plotWidth = Math.Max(UiScale.Scale(24), (int)Math.Round(plotHeight * maxAspect));
+            }
+
+            plotWidth = Math.Min(plotWidth, available.Width);
+            plotHeight = Math.Min(plotHeight, available.Height);
+
+            return new Rectangle(
+                available.Left + (available.Width - plotWidth) / 2,
+                available.Top + (available.Height - plotHeight) / 3,
+                plotWidth,
+                plotHeight);
+        }
     }
 
     private void DrawAxes(Graphics g, Rectangle plot, double maxValue, Color axisColor, Color gridColor)
@@ -2181,7 +2356,9 @@ internal sealed class UsageHistoryChartControl : Control
                 return;
             }
 
-            var labelTop = plot.Bottom + 4;
+            var labelTop = plot.Bottom + UiScale.Scale(4);
+            var labelWidth = Math.Max(UiScale.Scale(92), UiScale.TextWidth("00/00 00:00", labelFont) + UiScale.Scale(8));
+            var labelHeight = UiScale.LineHeight(labelFont);
             var first = _points.First();
             var middle = _points[_points.Count / 2];
             var last = _points.Last();
@@ -2190,17 +2367,17 @@ internal sealed class UsageHistoryChartControl : Control
                 g,
                 first.Label,
                 labelFont,
-                new Rectangle(plot.Left - 2, labelTop, 92, 18),
+                new Rectangle(plot.Left - UiScale.Scale(2), labelTop, labelWidth, labelHeight),
                 axisColor,
                 TextFormatFlags.Left | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
 
-            if (plot.Width >= 260 && _points.Count > 2)
+            if (plot.Width >= labelWidth * 3 && _points.Count > 2)
             {
                 TextRenderer.DrawText(
                     g,
                     middle.Label,
                     labelFont,
-                    new Rectangle(plot.Left + plot.Width / 2 - 46, labelTop, 92, 18),
+                    new Rectangle(plot.Left + plot.Width / 2 - labelWidth / 2, labelTop, labelWidth, labelHeight),
                     axisColor,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
             }
@@ -2209,7 +2386,7 @@ internal sealed class UsageHistoryChartControl : Control
                 g,
                 last.Label,
                 labelFont,
-                new Rectangle(plot.Right - 92, labelTop, 92, 18),
+                new Rectangle(plot.Right - labelWidth, labelTop, labelWidth, labelHeight),
                 axisColor,
                 TextFormatFlags.Right | TextFormatFlags.NoPadding | TextFormatFlags.EndEllipsis);
         }
@@ -2218,12 +2395,13 @@ internal sealed class UsageHistoryChartControl : Control
     private static void DrawYLabel(Graphics g, Font labelFont, Rectangle plot, double value, double maxValue, Color axisColor, Pen tickPen)
     {
         var y = plot.Bottom - (int)Math.Round(plot.Height * value / maxValue);
-        g.DrawLine(tickPen, plot.Left - 4, y, plot.Left, y);
+        g.DrawLine(tickPen, plot.Left - UiScale.Scale(4), y, plot.Left, y);
+        var labelHeight = UiScale.LineHeight(labelFont);
         TextRenderer.DrawText(
             g,
             value.ToString("0", CultureInfo.InvariantCulture) + "%",
             labelFont,
-            new Rectangle(0, y - 8, plot.Left - 9, 16),
+            new Rectangle(0, y - labelHeight / 2, Math.Max(1, plot.Left - UiScale.Scale(9)), labelHeight),
             axisColor,
             TextFormatFlags.Right | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoClipping);
     }
@@ -2279,7 +2457,8 @@ internal sealed class SettingsForm : Form
         MinimizeBox = false;
         MaximizeBox = false;
         ShowInTaskbar = false;
-        ClientSize = new Size(560, 700);
+        ClientSize = UiScale.FitToWorkingArea(UiScale.Size(560, 700), 48, 80);
+        AutoScroll = true;
         BackColor = Color.FromArgb(248, 249, 250);
         Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -2318,10 +2497,10 @@ internal sealed class SettingsForm : Form
         outer.Dock = DockStyle.Fill;
         outer.ColumnCount = 1;
         outer.RowCount = 2;
-        outer.Padding = new Padding(18, 16, 18, 14);
+        outer.Padding = UiScale.Padding(18, 16, 18, 14);
         outer.BackColor = BackColor;
         outer.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        outer.RowStyles.Add(new RowStyle(SizeType.Absolute, 50));
+        outer.RowStyles.Add(new RowStyle(SizeType.Absolute, UiScale.Scale(50)));
 
         var root = new TableLayoutPanel();
         root.Dock = DockStyle.Fill;
@@ -2329,7 +2508,7 @@ internal sealed class SettingsForm : Form
         root.Margin = new Padding(0);
         root.Padding = new Padding(0);
         root.BackColor = BackColor;
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 340));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, UiScale.Scale(340)));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
         AddSection(root, "Display");
@@ -2356,26 +2535,26 @@ internal sealed class SettingsForm : Form
         buttons.Dock = DockStyle.Fill;
         buttons.ColumnCount = 3;
         buttons.RowCount = 1;
-        buttons.Margin = new Padding(0, 10, 0, 0);
+        buttons.Margin = UiScale.Padding(0, 10, 0, 0);
         buttons.BackColor = BackColor;
         buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 106));
-        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 102));
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, UiScale.Scale(106)));
+        buttons.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, UiScale.Scale(102)));
 
         var okButton = new Button();
         okButton.Text = "OK";
         okButton.DialogResult = DialogResult.OK;
-        okButton.Size = new Size(98, 34);
+        okButton.Size = UiScale.Size(98, 34);
         okButton.Dock = DockStyle.Fill;
-        okButton.Margin = new Padding(4, 0, 0, 0);
+        okButton.Margin = UiScale.Padding(4, 0, 0, 0);
         StyleDialogButton(okButton, true);
 
         var cancelButton = new Button();
         cancelButton.Text = "Cancel";
         cancelButton.DialogResult = DialogResult.Cancel;
-        cancelButton.Size = new Size(98, 34);
+        cancelButton.Size = UiScale.Size(98, 34);
         cancelButton.Dock = DockStyle.Fill;
-        cancelButton.Margin = new Padding(0, 0, 4, 0);
+        cancelButton.Margin = UiScale.Padding(0, 0, 4, 0);
         StyleDialogButton(cancelButton, false);
 
         buttons.Controls.Add(cancelButton, 1, 0);
@@ -2434,9 +2613,9 @@ internal sealed class SettingsForm : Form
         number.DecimalPlaces = decimalPlaces;
         number.Increment = decimalPlaces == 0 ? 1 : 0.5M;
         number.Dock = DockStyle.Left;
-        number.Width = 124;
+        number.Width = UiScale.Scale(124);
         number.TextAlign = HorizontalAlignment.Right;
-        number.Margin = new Padding(0, 3, 0, 3);
+        number.Margin = UiScale.Padding(0, 3, 0, 3);
         return number;
     }
 
@@ -2444,8 +2623,8 @@ internal sealed class SettingsForm : Form
     {
         comboBox.DropDownStyle = ComboBoxStyle.DropDownList;
         comboBox.Dock = DockStyle.Left;
-        comboBox.Width = 124;
-        comboBox.Margin = new Padding(0, 3, 0, 3);
+        comboBox.Width = UiScale.Scale(124);
+        comboBox.Margin = UiScale.Padding(0, 3, 0, 3);
         comboBox.Items.Add("Light");
         comboBox.Items.Add("Dark");
         comboBox.SelectedIndex = string.Equals(selectedTheme, "dark", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
@@ -2459,7 +2638,7 @@ internal sealed class SettingsForm : Form
         label.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold, GraphicsUnit.Point);
         label.ForeColor = Color.FromArgb(24, 31, 40);
         label.TextAlign = ContentAlignment.BottomLeft;
-        label.Margin = new Padding(0, 8, 0, 3);
+        label.Margin = UiScale.Padding(0, 8, 0, 3);
         AddFullWidth(root, label, 36);
     }
 
@@ -2469,7 +2648,7 @@ internal sealed class SettingsForm : Form
         checkBox.Dock = DockStyle.Fill;
         checkBox.AutoSize = false;
         checkBox.TextAlign = ContentAlignment.MiddleLeft;
-        checkBox.Margin = new Padding(0, 3, 0, 3);
+        checkBox.Margin = UiScale.Padding(0, 3, 0, 3);
         checkBox.ForeColor = Color.FromArgb(45, 52, 62);
         AddFullWidth(root, checkBox, 34);
     }
@@ -2482,7 +2661,7 @@ internal sealed class SettingsForm : Form
         label.Dock = DockStyle.Fill;
         label.TextAlign = ContentAlignment.MiddleLeft;
         label.ForeColor = Color.FromArgb(45, 52, 62);
-        label.Margin = new Padding(0, 3, 10, 3);
+        label.Margin = UiScale.Padding(0, 3, 10, 3);
         root.Controls.Add(label, 0, row);
         root.Controls.Add(number, 1, row);
     }
@@ -2495,7 +2674,7 @@ internal sealed class SettingsForm : Form
         label.Dock = DockStyle.Fill;
         label.TextAlign = ContentAlignment.MiddleLeft;
         label.ForeColor = Color.FromArgb(45, 52, 62);
-        label.Margin = new Padding(0, 3, 10, 3);
+        label.Margin = UiScale.Padding(0, 3, 10, 3);
         root.Controls.Add(label, 0, row);
         root.Controls.Add(comboBox, 1, row);
     }
@@ -2511,7 +2690,7 @@ internal sealed class SettingsForm : Form
     {
         var row = root.RowStyles.Count;
         root.RowCount = row + 1;
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, height));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, UiScale.Scale(height)));
         return row;
     }
 
@@ -2585,8 +2764,8 @@ internal sealed class MainForm : Form
         StartupRegistration.Sync(_config.startWithWindows);
 
         Text = "Quota Monitor";
-        ClientSize = _config.compactMode ? new Size(720, 300) : new Size(960, 640);
-        MinimumSize = _config.compactMode ? new Size(560, 240) : new Size(780, 560);
+        ClientSize = MainClientSize(_config.compactMode);
+        MinimumSize = MainMinimumSize(_config.compactMode);
         FormBorderStyle = FormBorderStyle.Sizable;
         MinimizeBox = true;
         MaximizeBox = true;
@@ -2651,16 +2830,16 @@ internal sealed class MainForm : Form
         _rootLayout.Dock = DockStyle.Fill;
         _rootLayout.ColumnCount = 1;
         _rootLayout.RowCount = 3;
-        _rootLayout.Padding = new Padding(10);
+        _rootLayout.Padding = UiScale.Padding(6);
         _rootLayout.BackColor = BackColor;
         _rootLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        _rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-        _rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
+        _rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, ToolbarHeight()));
+        _rootLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, BottomBarHeight()));
 
         _columns = new TableLayoutPanel();
         _columns.Dock = DockStyle.Fill;
         _columns.RowCount = 1;
-        _columns.Margin = new Padding(0, 0, 0, 8);
+        _columns.Margin = UiScale.Padding(0, 0, 0, 4);
         _codexColumn = BuildServiceColumn(_codexHeader, _codexFiveHour, _codexWeek, _codexPaceChart, _codexHistoryChart, out _codexChartHost);
         _claudeColumn = BuildServiceColumn(_claudeHeader, _claudeFiveHour, _claudeWeek, _claudePaceChart, _claudeHistoryChart, out _claudeChartHost);
         ApplyServiceVisibility(false);
@@ -2679,8 +2858,11 @@ internal sealed class MainForm : Form
 
         _refreshButton.Text = "Refresh";
         _refreshButton.Dock = DockStyle.Fill;
-        _refreshButton.MinimumSize = new Size(108, 30);
-        _refreshButton.Margin = new Padding(8, 4, 0, 2);
+        using (var actionFont = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point))
+        {
+            _refreshButton.MinimumSize = new Size(108, Math.Max(30, ButtonContentHeight(actionFont)));
+        }
+        _refreshButton.Margin = UiScale.Padding(6, 3, 0, 2);
         StyleActionButton(_refreshButton, _theme);
         _refreshButton.Click += delegate { RefreshSnapshot(); };
 
@@ -2691,7 +2873,7 @@ internal sealed class MainForm : Form
         _topMostCheckBox.TextAlign = ContentAlignment.MiddleLeft;
         _topMostCheckBox.ForeColor = _theme.Text;
         _topMostCheckBox.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
-        _topMostCheckBox.Margin = new Padding(8, 5, 0, 0);
+        _topMostCheckBox.Margin = UiScale.Padding(6, 3, 0, 0);
         _topMostCheckBox.CheckedChanged += delegate
         {
             if (!_syncingTopMostControl)
@@ -2704,7 +2886,7 @@ internal sealed class MainForm : Form
         _status.ForeColor = _theme.MutedText;
         _status.TextAlign = ContentAlignment.MiddleLeft;
         _status.AutoEllipsis = true;
-        _status.Margin = new Padding(0, 3, 4, 0);
+        _status.Margin = UiScale.Padding(0, 2, 4, 0);
         bottom.Controls.Add(_status, 0, 0);
         bottom.Controls.Add(_topMostCheckBox, 1, 0);
         bottom.Controls.Add(_refreshButton, 2, 0);
@@ -2723,7 +2905,7 @@ internal sealed class MainForm : Form
         toolbar.FlowDirection = FlowDirection.LeftToRight;
         toolbar.WrapContents = false;
         toolbar.BackColor = BackColor;
-        toolbar.Margin = new Padding(4, 6, 4, 4);
+        toolbar.Margin = UiScale.Padding(4, 4, 4, 2);
         toolbar.Padding = new Padding(0);
 
         ConfigureToggleButton(_paceModeButton, "Pace", 76);
@@ -2748,8 +2930,8 @@ internal sealed class MainForm : Form
         _historyRangePanel.WrapContents = false;
         _historyRangePanel.AutoSize = true;
         _historyRangePanel.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-        _historyRangePanel.Height = 36;
-        _historyRangePanel.Margin = new Padding(10, 0, 0, 0);
+        _historyRangePanel.Height = UiScale.Scale(36);
+        _historyRangePanel.Margin = UiScale.Padding(10, 0, 0, 0);
         _historyRangePanel.Padding = new Padding(0);
         _historyRangePanel.BackColor = BackColor;
 
@@ -2772,14 +2954,16 @@ internal sealed class MainForm : Form
     private static void ConfigureToggleButton(Button button, string text, int width)
     {
         button.Text = text;
-        button.Size = new Size(width, 32);
-        button.MinimumSize = new Size(width, 32);
-        button.Margin = new Padding(0, 2, 8, 2);
+        button.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point);
+        var buttonWidth = Math.Max(width, UiScale.TextWidth(text, button.Font) + UiScale.Scale(20));
+        var buttonHeight = Math.Max(32, ButtonContentHeight(button.Font));
+        button.Size = new Size(buttonWidth, buttonHeight);
+        button.MinimumSize = new Size(buttonWidth, buttonHeight);
+        button.Margin = UiScale.Padding(0, 2, 6, 2);
         button.Padding = new Padding(0);
         button.TextAlign = ContentAlignment.MiddleCenter;
         button.FlatStyle = FlatStyle.Flat;
         button.FlatAppearance.BorderSize = 1;
-        button.Font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point);
     }
 
     private void SetHistoryAggregation(HistoryAggregation aggregation)
@@ -2824,17 +3008,17 @@ internal sealed class MainForm : Form
         _codexChartHost.Visible = !compact;
         _claudeChartHost.Visible = !compact;
         _rootLayout.RowStyles[1].SizeType = SizeType.Absolute;
-        _rootLayout.RowStyles[1].Height = compact ? 0 : 46;
+        _rootLayout.RowStyles[1].Height = compact ? 0 : ToolbarHeight();
         ApplyColumnCompactMode(_codexColumn, compact);
         ApplyColumnCompactMode(_claudeColumn, compact);
-        MinimumSize = compact ? new Size(560, 240) : new Size(780, 560);
-        if (compact && Height > 360)
+        MinimumSize = MainMinimumSize(compact);
+        if (compact && Height > UiScale.Scale(360))
         {
-            Height = 300;
+            Height = MainClientSize(true).Height;
         }
-        else if (!compact && Height < 560)
+        else if (!compact && Height < UiScale.Scale(560))
         {
-            Height = 640;
+            Height = MainClientSize(false).Height;
         }
 
         ApplyChartMode();
@@ -2887,7 +3071,38 @@ internal sealed class MainForm : Form
 
         column.RowStyles[3].SizeType = compact ? SizeType.Absolute : SizeType.Percent;
         column.RowStyles[3].Height = compact ? 0 : 100;
-        column.Padding = compact ? new Padding(10, 8, 10, 4) : new Padding(10, 8, 10, 8);
+        column.Padding = compact ? UiScale.Padding(6, 3, 6, 4) : UiScale.Padding(6, 4, 6, 6);
+    }
+
+    private static Size MainClientSize(bool compact)
+    {
+        return UiScale.FitToWorkingArea(compact ? new Size(720, 300) : new Size(960, 600), 48, 80);
+    }
+
+    private static Size MainMinimumSize(bool compact)
+    {
+        return UiScale.FitToWorkingArea(compact ? new Size(560, 280) : new Size(780, 500), 64, 96);
+    }
+
+    private static int ToolbarHeight()
+    {
+        using (var font = new Font("Segoe UI", 8.5F, FontStyle.Regular, GraphicsUnit.Point))
+        {
+            return Math.Max(40, ButtonContentHeight(font) + UiScale.Scale(8));
+        }
+    }
+
+    private static int BottomBarHeight()
+    {
+        using (var font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point))
+        {
+            return Math.Max(38, ButtonContentHeight(font) + UiScale.Scale(8));
+        }
+    }
+
+    private static int ButtonContentHeight(Font font)
+    {
+        return UiScale.LineHeight(font) + UiScale.Scale(8);
     }
 
     private static void StyleToggleButton(Button button, bool selected, bool primary, UiTheme theme)
@@ -3040,24 +3255,24 @@ internal sealed class MainForm : Form
         column.Dock = DockStyle.Fill;
         column.ColumnCount = 1;
         column.RowCount = 4;
-        column.Padding = new Padding(10, 8, 10, 8);
-        column.Margin = new Padding(4);
+        column.Padding = UiScale.Padding(6, 4, 6, 6);
+        column.Margin = UiScale.Padding(2);
         column.BackColor = Color.FromArgb(248, 249, 250);
-        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
-        column.RowStyles.Add(new RowStyle(SizeType.Absolute, 76));
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, header.PreferredControlHeight));
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, first.PreferredControlHeight));
+        column.RowStyles.Add(new RowStyle(SizeType.Absolute, second.PreferredControlHeight));
         column.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
         first.Dock = DockStyle.Fill;
         second.Dock = DockStyle.Fill;
         paceChart.Dock = DockStyle.Fill;
         historyChart.Dock = DockStyle.Fill;
-        first.Margin = new Padding(0, 0, 0, 2);
-        second.Margin = new Padding(0, 2, 0, 0);
+        first.Margin = UiScale.Padding(0, 0, 0, 1);
+        second.Margin = UiScale.Padding(0, 1, 0, 0);
 
         chartHost = new Panel();
         chartHost.Dock = DockStyle.Fill;
-        chartHost.Margin = new Padding(0, 12, 0, 0);
+        chartHost.Margin = UiScale.Padding(0, 6, 0, 0);
         chartHost.BackColor = Color.FromArgb(248, 249, 250);
         chartHost.Controls.Add(historyChart);
         chartHost.Controls.Add(paceChart);
@@ -3308,7 +3523,10 @@ internal sealed class MainForm : Form
 
         StartPosition = FormStartPosition.Manual;
         var area = Screen.PrimaryScreen.WorkingArea;
-        Location = new Point(area.Right - Width - 16, area.Top + 16);
+        var margin = UiScale.Scale(16);
+        Location = new Point(
+            Math.Max(area.Left + margin, area.Right - Width - margin),
+            area.Top + margin);
     }
 
     private void RefreshSnapshot()
