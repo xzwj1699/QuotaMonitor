@@ -57,7 +57,7 @@ public sealed class MonitorConfig
             showClaude = true,
             minimizeToTray = true,
             startWithSystem = false,
-            compactMode = false,
+            compactMode = true,
             theme = "light",
             alertsEnabled = true,
             alertFiveHourRemainingPercent = 20,

@@ -7,7 +7,7 @@
   "minimizeToTray": true,
   "startWithSystem": false,
   "startWithWindows": false,
-  "compactMode": false,
+  "compactMode": true,
   "theme": "light",
   "alertsEnabled": true,
   "alertFiveHourRemainingPercent": 20,

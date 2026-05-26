@@ -916,7 +916,7 @@ public partial class MainWindow : Window
 
         var bothVisible = _config.CodexVisible && _config.ClaudeVisible;
         _columns.ColumnDefinitions = new ColumnDefinitions(bothVisible ? "*,*" : "*");
-        _columns.ColumnSpacing = bothVisible ? 12 : 0;
+        _columns.ColumnSpacing = bothVisible ? (_config.compactMode ? 8 : 12) : 0;
         Grid.SetColumn(_codexPanel.Root, 0);
         Grid.SetColumn(_claudePanel.Root, _config.CodexVisible ? 1 : 0);
     }
@@ -934,25 +934,43 @@ public partial class MainWindow : Window
     private void ApplyCompactMode()
     {
         var compact = _config.compactMode;
+        var bothVisible = _config.CodexVisible && _config.ClaudeVisible;
         if (_chartToolbar != null)
         {
             _chartToolbar.IsVisible = !compact;
         }
 
+        if (_rootGrid != null)
+        {
+            _rootGrid.Margin = compact ? new Thickness(10) : new Thickness(14);
+        }
+
+        _titleText.FontSize = compact ? 16 : 20;
+        _statusText.FontSize = compact ? 12 : 13;
+        _configPathText.IsVisible = !compact;
+        _openDataButton.IsVisible = !compact;
+        _openConfigButton.IsVisible = !compact;
+        _diagnosticsButton.IsVisible = !compact;
+        _settingsButton.IsVisible = !compact;
+        _refreshButton.Height = compact ? 28 : 32;
+        _refreshButton.MinWidth = compact ? 72 : 96;
+
         _codexPanel.SetCompactMode(compact);
         _claudePanel.SetCompactMode(compact);
 
-        MinWidth = compact ? 460 : 720;
-        MinHeight = compact ? 340 : 600;
+        MinWidth = compact ? (bothVisible ? 520 : 380) : 620;
+        MinHeight = compact ? 250 : 430;
         if (compact)
         {
-            Width = Math.Min(Width, _config.CodexVisible && _config.ClaudeVisible ? 700 : 500);
-            Height = Math.Min(Height, 430);
+            Width = Math.Min(Math.Max(Width, MinWidth), bothVisible ? 620 : 430);
+            Height = Math.Min(Math.Max(Height, MinHeight), 310);
+            ApplyServiceVisibility();
             return;
         }
 
-        Width = Math.Max(Width, 900);
-        Height = Math.Max(Height, 640);
+        Width = Math.Max(Width, bothVisible ? 780 : 560);
+        Height = Math.Max(Height, 520);
+        ApplyServiceVisibility();
     }
 
     private bool SaveConfig()
@@ -1034,14 +1052,14 @@ public partial class MainWindow : Window
     private static void ConfigureHeaderButton(Button button, string text)
     {
         button.Content = text;
-        button.Height = 34;
-        button.MinWidth = 96;
+        button.Height = 32;
+        button.MinWidth = 88;
     }
 
     private static void ConfigureToggleButton(Button button, string text, double minWidth)
     {
         button.Content = text;
-        button.Height = 32;
+        button.Height = 30;
         button.MinWidth = minWidth;
     }
 
@@ -1414,19 +1432,22 @@ public partial class MainWindow : Window
         public ServicePanel(string name, string longWindowLabel)
         {
             _title.Text = name;
-            _title.FontSize = 18;
+            _title.FontSize = 17;
             _title.FontWeight = FontWeight.SemiBold;
+            _title.TextTrimming = TextTrimming.CharacterEllipsis;
 
             _plan.Text = "Plan: --";
             _plan.Margin = new Thickness(0, 2, 0, 10);
+            _plan.FontSize = 12;
+            _plan.TextTrimming = TextTrimming.CharacterEllipsis;
 
             _primary.Set("5h", "Loading...", null);
             _longWindow.Set(longWindowLabel, "Loading...", null);
-            _paceChart.Height = 220;
-            _historyChart.Height = 220;
+            _paceChart.Height = 160;
+            _historyChart.Height = 160;
             _historyChart.IsVisible = false;
 
-            _stack.Spacing = 12;
+            _stack.Spacing = 10;
             _stack.Children.Add(_title);
             _stack.Children.Add(_plan);
             _stack.Children.Add(_primary.Root);
@@ -1438,7 +1459,7 @@ public partial class MainWindow : Window
             {
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(8),
-                Padding = new Thickness(16),
+                Padding = new Thickness(12),
                 Child = _stack
             };
             ApplyTheme(UiPalette.FromThemeName("light"));
@@ -1480,9 +1501,11 @@ public partial class MainWindow : Window
         public void SetCompactMode(bool compactMode)
         {
             _compactMode = compactMode;
-            _stack.Spacing = compactMode ? 8 : 12;
+            _title.FontSize = compactMode ? 15 : 17;
+            _plan.IsVisible = !compactMode;
+            _stack.Spacing = compactMode ? 6 : 10;
             _plan.Margin = compactMode ? new Thickness(0, 2, 0, 6) : new Thickness(0, 2, 0, 10);
-            Root.Padding = compactMode ? new Thickness(12) : new Thickness(16);
+            Root.Padding = compactMode ? new Thickness(8) : new Thickness(12);
             _primary.SetCompactMode(compactMode);
             _longWindow.SetCompactMode(compactMode);
             ApplyChartVisibility();
@@ -1515,22 +1538,24 @@ public partial class MainWindow : Window
 
         public WindowRow()
         {
-            _title.FontSize = 16;
+            _title.FontSize = 15;
             _title.FontWeight = FontWeight.SemiBold;
+            _title.TextTrimming = TextTrimming.CharacterEllipsis;
 
-            _detail.FontSize = 13;
+            _detail.FontSize = 12;
             _detail.TextWrapping = TextWrapping.Wrap;
+            _detail.TextTrimming = TextTrimming.CharacterEllipsis;
 
             _bar.Minimum = 0;
             _bar.Maximum = 100;
-            _bar.Height = 12;
-            _bar.Margin = new Thickness(0, 8, 0, 0);
+            _bar.Height = 10;
+            _bar.Margin = new Thickness(0, 7, 0, 0);
 
             Root = new Border
             {
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(6),
-                Padding = new Thickness(12),
+                Padding = new Thickness(10),
                 Child = new StackPanel
                 {
                     Spacing = 3,
@@ -1557,11 +1582,12 @@ public partial class MainWindow : Window
 
         public void SetCompactMode(bool compactMode)
         {
-            _title.FontSize = compactMode ? 14 : 16;
-            _detail.FontSize = compactMode ? 12 : 13;
-            _bar.Height = compactMode ? 10 : 12;
-            _bar.Margin = new Thickness(0, compactMode ? 6 : 8, 0, 0);
-            Root.Padding = compactMode ? new Thickness(10) : new Thickness(12);
+            _title.FontSize = compactMode ? 13 : 15;
+            _detail.FontSize = compactMode ? 11 : 12;
+            _detail.TextWrapping = compactMode ? TextWrapping.NoWrap : TextWrapping.Wrap;
+            _bar.Height = compactMode ? 8 : 10;
+            _bar.Margin = new Thickness(0, compactMode ? 5 : 7, 0, 0);
+            Root.Padding = compactMode ? new Thickness(8) : new Thickness(10);
         }
 
         public void ApplyTheme(UiPalette palette)

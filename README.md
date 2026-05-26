@@ -29,7 +29,7 @@ See `docs/macos-windows-migration.md` for the migration plan and `docs/windows-m
 - Pace charts estimate when quota will be exhausted at the current rate.
 - Auto refresh every 5 minutes by default.
 - System tray/menu bar mode with restore, refresh, settings, and exit actions.
-- Resizable window, optional topmost mode, compact mode, and light/dark themes.
+- Resizable window, optional topmost mode, compact default monitor view, and light/dark themes.
 - Optional start with system.
 - Legacy Windows builds do not require a .NET SDK; new cross-platform builds require the .NET 10 SDK.
 
@@ -172,7 +172,7 @@ Important settings:
 - `minimizeToTray`: keep the app running in the system tray/menu bar when the window is closed or minimized.
 - `startWithWindows`: legacy Windows name for registering the app in the current user's Windows startup Run key.
 - `startWithSystem`: cross-platform replacement used by the new Core configuration model.
-- `compactMode`: hide charts and show a smaller quota-bar-only view.
+- `compactMode`: hide charts and show a smaller quota-bar-only monitor view. New cross-platform configs enable this by default.
 - `theme`: `light` or `dark`.
 - `alertsEnabled`: show low-quota notifications.
 - `alertFiveHourRemainingPercent`: alert threshold for 5h quota.
