@@ -4,5 +4,6 @@ quota-monitor.snapshot.txt
 quota-monitor-history.jsonl
 bin/
 obj/
+dist/
 .vs/
 *.user
