@@ -65,6 +65,9 @@ public partial class MainWindow : Window
     private readonly ServicePanel _codexPanel = new("Codex", "Week");
     private readonly ServicePanel _claudePanel = new("Claude", "7d");
     private Grid? _rootGrid;
+    private Grid? _header;
+    private Grid? _bottom;
+    private ScrollViewer? _contentScrollViewer;
     private StackPanel? _chartToolbar;
     private Grid? _columns;
     private TrayIcon? _trayIcon;
@@ -190,12 +193,12 @@ public partial class MainWindow : Window
         _titleText.Foreground = _palette.Text;
         _titleText.VerticalAlignment = VerticalAlignment.Center;
 
-        var header = new Grid
+        _header = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
             Margin = new Thickness(0, 0, 0, 12)
         };
-        header.Children.Add(_titleText);
+        _header.Children.Add(_titleText);
 
         var actions = new StackPanel
         {
@@ -211,7 +214,7 @@ public partial class MainWindow : Window
             }
         };
         Grid.SetColumn(actions, 1);
-        header.Children.Add(actions);
+        _header.Children.Add(actions);
 
         _chartToolbar = new StackPanel
         {
@@ -229,20 +232,21 @@ public partial class MainWindow : Window
         _columns = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,*"),
-            ColumnSpacing = 12
+            ColumnSpacing = 12,
+            VerticalAlignment = VerticalAlignment.Top
         };
         _columns.Children.Add(_codexPanel.Root);
         Grid.SetColumn(_claudePanel.Root, 1);
         _columns.Children.Add(_claudePanel.Root);
 
-        var bottom = new Grid
+        _bottom = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
             Margin = new Thickness(0, 12, 0, 0)
         };
-        bottom.Children.Add(_statusText);
+        _bottom.Children.Add(_statusText);
         Grid.SetColumn(_configPathText, 1);
-        bottom.Children.Add(_configPathText);
+        _bottom.Children.Add(_configPathText);
 
         _rootGrid = new Grid
         {
@@ -250,19 +254,19 @@ public partial class MainWindow : Window
             Margin = new Thickness(18)
         };
         _rootGrid.ContextMenu = BuildContextMenu();
-        _rootGrid.Children.Add(header);
+        _rootGrid.Children.Add(_header);
         Grid.SetRow(_chartToolbar, 1);
         _rootGrid.Children.Add(_chartToolbar);
-        var scroll = new ScrollViewer
+        _contentScrollViewer = new ScrollViewer
         {
             Content = _columns,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
         };
-        Grid.SetRow(scroll, 2);
-        _rootGrid.Children.Add(scroll);
-        Grid.SetRow(bottom, 3);
-        _rootGrid.Children.Add(bottom);
+        Grid.SetRow(_contentScrollViewer, 2);
+        _rootGrid.Children.Add(_contentScrollViewer);
+        Grid.SetRow(_bottom, 3);
+        _rootGrid.Children.Add(_bottom);
 
         ApplyServiceVisibility();
         ApplyWindowPreferences();
@@ -943,6 +947,26 @@ public partial class MainWindow : Window
         if (_rootGrid != null)
         {
             _rootGrid.Margin = compact ? new Thickness(10) : new Thickness(14);
+            _rootGrid.RowDefinitions = compact
+                ? new RowDefinitions("Auto,Auto,Auto,Auto")
+                : new RowDefinitions("Auto,Auto,*,Auto");
+        }
+
+        if (_header != null)
+        {
+            _header.Margin = compact ? new Thickness(0, 0, 0, 6) : new Thickness(0, 0, 0, 12);
+        }
+
+        if (_bottom != null)
+        {
+            _bottom.Margin = compact ? new Thickness(0, 6, 0, 0) : new Thickness(0, 12, 0, 0);
+        }
+
+        if (_contentScrollViewer != null)
+        {
+            _contentScrollViewer.VerticalScrollBarVisibility = compact
+                ? ScrollBarVisibility.Disabled
+                : ScrollBarVisibility.Auto;
         }
 
         _titleText.FontSize = compact ? 16 : 20;
@@ -958,12 +982,12 @@ public partial class MainWindow : Window
         _codexPanel.SetCompactMode(compact);
         _claudePanel.SetCompactMode(compact);
 
-        MinWidth = compact ? (bothVisible ? 520 : 380) : 620;
-        MinHeight = compact ? 250 : 430;
+        SizeToContent = compact ? SizeToContent.Height : SizeToContent.Manual;
+        MinWidth = compact ? (bothVisible ? 480 : 340) : 620;
+        MinHeight = compact ? 0 : 430;
         if (compact)
         {
-            Width = Math.Min(Math.Max(Width, MinWidth), bothVisible ? 620 : 430);
-            Height = Math.Min(Math.Max(Height, MinHeight), 310);
+            Width = Math.Min(Math.Max(Width, MinWidth), bothVisible ? 600 : 420);
             ApplyServiceVisibility();
             return;
         }
@@ -1460,6 +1484,7 @@ public partial class MainWindow : Window
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(12),
+                VerticalAlignment = VerticalAlignment.Top,
                 Child = _stack
             };
             ApplyTheme(UiPalette.FromThemeName("light"));

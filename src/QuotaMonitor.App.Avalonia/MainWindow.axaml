@@ -5,7 +5,6 @@
         mc:Ignorable="d" d:DesignWidth="620" d:DesignHeight="320"
         x:Class="QuotaMonitor.App.Avalonia.MainWindow"
         Title="Quota Monitor"
-        Width="640"
-        Height="320"
-        MinWidth="420"
-        MinHeight="260" />
+        Width="600"
+        MinWidth="380"
+        MinHeight="180" />
