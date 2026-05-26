@@ -531,9 +531,21 @@ public partial class MainWindow : Window
             return;
         }
 
-        _trayIcon.ToolTipText = _lastTrayTooltipText;
-        _trayIcon.IsVisible = _config.minimizeToTray;
-        _trayIcon.Menu = BuildTrayMenu();
+        try
+        {
+            _trayIcon.ToolTipText = _lastTrayTooltipText;
+            _trayIcon.IsVisible = _config.minimizeToTray;
+
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                _trayIcon.Menu = BuildTrayMenu();
+            }
+        }
+        catch (Exception ex)
+        {
+            _log.Write("tray refresh error: " + ex);
+            CrashReporter.Write("Tray refresh error", ex);
+        }
     }
 
     private static WindowIcon? TryLoadWindowIcon()

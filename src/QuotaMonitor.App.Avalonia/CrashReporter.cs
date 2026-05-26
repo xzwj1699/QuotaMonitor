@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using QuotaMonitor.Core.Infrastructure;
 
@@ -40,29 +42,35 @@ internal static class CrashReporter
 
     private static void WriteRaw(string text)
     {
-        try
+        var entry = DateTimeOffset.Now.ToString("o", CultureInfo.InvariantCulture) + " " + text + Environment.NewLine;
+        foreach (var path in ResolveCrashLogPaths())
         {
-            var path = ResolveCrashLogPath();
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.AppendAllText(
-                path,
-                DateTimeOffset.Now.ToString("o", CultureInfo.InvariantCulture) + " " + text + Environment.NewLine);
-        }
-        catch
-        {
-            // Crash logging must never cause a second startup failure.
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                File.AppendAllText(path, entry);
+            }
+            catch
+            {
+                // Try the next crash log path.
+            }
         }
     }
 
-    private static string ResolveCrashLogPath()
+    private static IEnumerable<string> ResolveCrashLogPaths()
     {
+        var paths = new List<string>();
         try
         {
-            return Path.Combine(DefaultAppPaths.Create().AppDataDirectory, "quota-monitor-crash.log");
+            paths.Add(Path.Combine(DefaultAppPaths.Create().AppDataDirectory, "quota-monitor-crash.log"));
         }
         catch
         {
-            return Path.Combine(AppContext.BaseDirectory, "quota-monitor-crash.log");
+            // Keep fallback paths below.
         }
+
+        paths.Add(Path.Combine(AppContext.BaseDirectory, "quota-monitor-crash.log"));
+        paths.Add(Path.Combine(Path.GetTempPath(), "quota-monitor-crash.log"));
+        return paths.Distinct(StringComparer.OrdinalIgnoreCase);
     }
 }
