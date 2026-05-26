@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Avalonia;
 using Avalonia.Controls;
@@ -95,18 +96,35 @@ public partial class MainWindow : Window
         _timer.Tick += async (_, _) => await RefreshSnapshotAsync();
 
         Content = BuildContent();
-        _notificationManager = new WindowNotificationManager(this)
+        try
         {
-            Position = NotificationPosition.TopRight,
-            MaxItems = 3
-        };
+            _notificationManager = new WindowNotificationManager(this)
+            {
+                Position = NotificationPosition.TopRight,
+                MaxItems = 3
+            };
+        }
+        catch (Exception ex)
+        {
+            _log.Write("notification manager init error: " + ex);
+            CrashReporter.Write("Notification manager init error", ex);
+        }
+
         InitializeTrayIcon();
         Opened += async (_, _) =>
         {
-            _hiddenToTray = false;
-            _timer.Start();
-            PositionAtTopRightIfNeeded();
-            await RefreshSnapshotAsync();
+            try
+            {
+                _hiddenToTray = false;
+                _timer.Start();
+                PositionAtTopRightIfNeeded();
+                await RefreshSnapshotAsync();
+            }
+            catch (Exception ex)
+            {
+                _log.Write("opened handler error: " + ex);
+                CrashReporter.Write("Opened handler error", ex);
+            }
         };
         Closing += OnClosing;
         Closed += (_, _) =>
@@ -295,31 +313,44 @@ public partial class MainWindow : Window
 
     private void InitializeTrayIcon()
     {
-        if (Application.Current == null)
+        try
         {
-            return;
+            if (Application.Current == null)
+            {
+                return;
+            }
+
+            var trayIcon = new TrayIcon
+            {
+                ToolTipText = "Quota Monitor",
+                IsVisible = _config.minimizeToTray,
+                Menu = BuildTrayMenu()
+            };
+
+            var icon = TryLoadWindowIcon();
+            if (icon != null)
+            {
+                trayIcon.Icon = icon;
+            }
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                MacOSProperties.SetIsTemplateIcon(trayIcon, false);
+            }
+
+            trayIcon.Clicked += (_, _) => ShowWindowFromTray();
+
+            var icons = TrayIcon.GetIcons(Application.Current) ?? new TrayIcons();
+            icons.Add(trayIcon);
+            TrayIcon.SetIcons(Application.Current, icons);
+            _trayIcon = trayIcon;
         }
-
-        var trayIcon = new TrayIcon
+        catch (Exception ex)
         {
-            ToolTipText = "Quota Monitor",
-            IsVisible = _config.minimizeToTray,
-            Menu = BuildTrayMenu()
-        };
-
-        var icon = TryLoadWindowIcon();
-        if (icon != null)
-        {
-            trayIcon.Icon = icon;
+            _log.Write("tray init error: " + ex);
+            CrashReporter.Write("Tray init error", ex);
+            _trayIcon = null;
         }
-
-        MacOSProperties.SetIsTemplateIcon(trayIcon, false);
-        trayIcon.Clicked += (_, _) => ShowWindowFromTray();
-
-        var icons = TrayIcon.GetIcons(Application.Current) ?? new TrayIcons();
-        icons.Add(trayIcon);
-        TrayIcon.SetIcons(Application.Current, icons);
-        _trayIcon = trayIcon;
     }
 
     private void OnClosing(object? sender, WindowClosingEventArgs e)
@@ -393,21 +424,29 @@ public partial class MainWindow : Window
             return;
         }
 
-        var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
-        if (screen == null)
+        try
         {
-            return;
-        }
+            var screen = Screens.ScreenFromWindow(this) ?? Screens.Primary;
+            if (screen == null)
+            {
+                return;
+            }
 
-        var workingArea = screen.WorkingArea;
-        var scaling = Math.Max(1, screen.Scaling);
-        var width = (int)Math.Ceiling(Math.Max(Bounds.Width, Width) * scaling);
-        var height = (int)Math.Ceiling(Math.Max(Bounds.Height, Height) * scaling);
-        var margin = (int)Math.Ceiling(16 * scaling);
-        var x = workingArea.X + workingArea.Width - width - margin;
-        var y = workingArea.Y + margin;
-        var maxY = workingArea.Y + Math.Max(0, workingArea.Height - height - margin);
-        Position = new PixelPoint(Math.Max(workingArea.X + margin, x), Math.Min(y, maxY));
+            var workingArea = screen.WorkingArea;
+            var scaling = Math.Max(1, screen.Scaling);
+            var width = (int)Math.Ceiling(Math.Max(Bounds.Width, Width) * scaling);
+            var height = (int)Math.Ceiling(Math.Max(Bounds.Height, Height) * scaling);
+            var margin = (int)Math.Ceiling(16 * scaling);
+            var x = workingArea.X + workingArea.Width - width - margin;
+            var y = workingArea.Y + margin;
+            var maxY = workingArea.Y + Math.Max(0, workingArea.Height - height - margin);
+            Position = new PixelPoint(Math.Max(workingArea.X + margin, x), Math.Min(y, maxY));
+        }
+        catch (Exception ex)
+        {
+            _log.Write("position window error: " + ex);
+            CrashReporter.Write("Position window error", ex);
+        }
     }
 
     private NativeMenu BuildTrayMenu()
@@ -874,7 +913,10 @@ public partial class MainWindow : Window
     {
         Topmost = _config.alwaysOnTop;
         ApplyCompactMode();
-        PositionAtTopRightIfNeeded();
+        if (IsVisible)
+        {
+            PositionAtTopRightIfNeeded();
+        }
     }
 
     private void ApplyCompactMode()
