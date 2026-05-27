@@ -45,6 +45,7 @@ public partial class MainWindow : Window
     private bool _hiddenToTray;
     private string _lastDiagnosticsText = "No refresh completed yet.";
     private string _lastTrayTooltipText = "Quota Monitor";
+    private QuotaSnapshot? _lastSnapshot;
     private ChartMode _chartMode = ChartMode.Pace;
     private HistoryAggregation _historyAggregation = HistoryAggregation.Day;
 
@@ -71,6 +72,9 @@ public partial class MainWindow : Window
     private StackPanel? _chartToolbar;
     private Grid? _columns;
     private TrayIcon? _trayIcon;
+    private readonly List<NativeMenuItem> _trayUsageItems = new();
+    private NativeMenuItem? _trayWindowItem;
+    private NativeMenuItem? _trayCompactItem;
 
     public MainWindow()
         : this(null)
@@ -464,46 +468,134 @@ public partial class MainWindow : Window
     private NativeMenu BuildTrayMenu()
     {
         var menu = new NativeMenu();
+        _trayUsageItems.Clear();
+        _trayWindowItem = null;
+        _trayCompactItem = null;
+
         menu.Add(new NativeMenuItem("Quota Monitor")
         {
             IsEnabled = false
         });
+        for (var i = 0; i < 4; i++)
+        {
+            var usageItem = new NativeMenuItem("Usage loading...")
+            {
+                IsEnabled = false
+            };
+            _trayUsageItems.Add(usageItem);
+            menu.Add(usageItem);
+        }
+
+        UpdateTrayMenuItems();
         menu.Add(new NativeMenuItemSeparator());
-        menu.Add(BuildNativeMenuItem(_hiddenToTray ? "Show Window" : "Hide Window", _hiddenToTray ? ShowWindowFromTray : HideToTray));
-        menu.Add(BuildNativeMenuItem("Refresh", async () => await RefreshSnapshotAsync()));
-        menu.Add(new NativeMenuItemSeparator());
-        menu.Add(BuildNativeCheckMenuItem("Show Codex", _config.CodexVisible, () => SetServiceVisible("Codex", !_config.CodexVisible)));
-        menu.Add(BuildNativeCheckMenuItem("Show Claude", _config.ClaudeVisible, () => SetServiceVisible("Claude", !_config.ClaudeVisible)));
-        menu.Add(BuildNativeCheckMenuItem("Compact Mode", _config.compactMode, () => SetCompactModeEnabled(!_config.compactMode)));
-        menu.Add(BuildNativeCheckMenuItem("Always On Top", _config.alwaysOnTop, () => SetAlwaysOnTopEnabled(!_config.alwaysOnTop)));
-        menu.Add(BuildNativeRadioMenuItem("Light Theme", !_palette.IsDark, () => SetTheme("light")));
-        menu.Add(BuildNativeRadioMenuItem("Dark Theme", _palette.IsDark, () => SetTheme("dark")));
-        menu.Add(BuildNativeCheckMenuItem("Minimize To Tray", _config.minimizeToTray, () => SetMinimizeToTrayEnabled(!_config.minimizeToTray)));
-        menu.Add(BuildNativeCheckMenuItem("Start With System", _config.startWithSystem, () => SetStartWithSystemEnabled(!_config.startWithSystem)));
-        menu.Add(new NativeMenuItemSeparator());
-        menu.Add(BuildNativeRadioMenuItem("Pace Graph", _chartMode == ChartMode.Pace, () => SetChartMode(ChartMode.Pace)));
-        menu.Add(BuildNativeRadioMenuItem("Usage History", _chartMode == ChartMode.History, () => SetChartMode(ChartMode.History)));
-        menu.Add(BuildHistoryRangeMenu());
+        _trayWindowItem = BuildNativeMenuItem(_hiddenToTray ? "Show Window" : "Hide Window", ToggleWindowFromTray);
+        menu.Add(_trayWindowItem);
+        menu.Add(BuildNativeMenuItem("Refresh Now", async () => await RefreshSnapshotAsync()));
+        _trayCompactItem = BuildNativeCheckMenuItem("Compact Mode", _config.compactMode, () => SetCompactModeEnabled(!_config.compactMode));
+        menu.Add(_trayCompactItem);
         menu.Add(new NativeMenuItemSeparator());
         menu.Add(BuildNativeMenuItem("Diagnostics", ShowDiagnosticsFromTray));
         menu.Add(BuildNativeMenuItem("Settings", async () => await ShowSettingsFromTrayAsync()));
-        menu.Add(BuildNativeMenuItem("Open Config", () => OpenPath(_paths.ConfigPath)));
-        menu.Add(BuildNativeMenuItem("Open Data", () => OpenPath(_paths.AppDataDirectory)));
         menu.Add(new NativeMenuItemSeparator());
         menu.Add(BuildNativeMenuItem("Quit", RequestQuit));
         return menu;
     }
 
-    private NativeMenuItem BuildHistoryRangeMenu()
+    private void ToggleWindowFromTray()
     {
-        var submenu = new NativeMenu();
-        submenu.Add(BuildNativeRadioMenuItem("Day", _historyAggregation == HistoryAggregation.Day, () => SetHistoryAggregation(HistoryAggregation.Day)));
-        submenu.Add(BuildNativeRadioMenuItem("Week", _historyAggregation == HistoryAggregation.Week, () => SetHistoryAggregation(HistoryAggregation.Week)));
-        submenu.Add(BuildNativeRadioMenuItem("Month", _historyAggregation == HistoryAggregation.Month, () => SetHistoryAggregation(HistoryAggregation.Month)));
-        return new NativeMenuItem("History Range")
+        if (_hiddenToTray)
         {
-            Menu = submenu
-        };
+            ShowWindowFromTray();
+            return;
+        }
+
+        HideToTray();
+    }
+
+    private void UpdateTrayMenuItems()
+    {
+        if (_trayWindowItem != null)
+        {
+            _trayWindowItem.Header = _hiddenToTray ? "Show Window" : "Hide Window";
+        }
+
+        if (_trayCompactItem != null)
+        {
+            _trayCompactItem.IsChecked = _config.compactMode;
+        }
+
+        var usageLines = BuildTrayUsageLines();
+        for (var i = 0; i < _trayUsageItems.Count; i++)
+        {
+            var item = _trayUsageItems[i];
+            item.IsVisible = i < usageLines.Count;
+            item.Header = i < usageLines.Count ? usageLines[i] : string.Empty;
+        }
+    }
+
+    private List<string> BuildTrayUsageLines()
+    {
+        if (_lastSnapshot == null)
+        {
+            return new List<string> { "Usage loading..." };
+        }
+
+        var lines = new List<string>();
+        if (_config.CodexVisible)
+        {
+            AddCodexTrayUsage(lines, _lastSnapshot.Codex);
+        }
+
+        if (_config.ClaudeVisible)
+        {
+            AddClaudeTrayUsage(lines, _lastSnapshot.Claude);
+        }
+
+        return lines.Count == 0 ? new List<string> { "Usage unavailable" } : lines;
+    }
+
+    private static void AddCodexTrayUsage(List<string> lines, CodexSnapshot codex)
+    {
+        if (!codex.Available)
+        {
+            lines.Add("Codex: " + SimplifyError(codex.Error));
+            return;
+        }
+
+        lines.Add(BuildWindowUsageLine("Codex 5h", codex.Primary));
+        lines.Add(BuildWindowUsageLine("Codex Week", codex.Secondary));
+    }
+
+    private static void AddClaudeTrayUsage(List<string> lines, ClaudeSnapshot claude)
+    {
+        if (!claude.Available)
+        {
+            lines.Add("Claude: " + SimplifyError(claude.Error));
+            return;
+        }
+
+        if (claude.RealtimeFiveHour != null || claude.RealtimeWeek != null)
+        {
+            lines.Add(BuildWindowUsageLine("Claude 5h", claude.RealtimeFiveHour));
+            lines.Add(BuildWindowUsageLine("Claude 7d", claude.RealtimeWeek));
+            return;
+        }
+
+        var fiveRemaining = claude.RemainingTokenPercent ?? claude.RemainingMessagePercent;
+        var weekRemaining = claude.WeeklyRemainingTokenPercent ?? claude.WeeklyRemainingMessagePercent;
+        lines.Add(BuildLocalClaudeUsageLine("Claude 5h", fiveRemaining, claude.MessageCount, claude.WeightedTokens));
+        lines.Add(BuildLocalClaudeUsageLine("Claude 7d", weekRemaining, claude.WeeklyMessageCount, claude.WeeklyWeightedTokens));
+    }
+
+    private static string BuildWindowUsageLine(string label, CodexWindow? window)
+    {
+        return label + ": left " + FormatShortPercent(window?.RemainingPercent) + ", used " + FormatUsedPercent(window);
+    }
+
+    private static string BuildLocalClaudeUsageLine(string label, double? remainingPercent, int messageCount, long weightedTokens)
+    {
+        return label + ": left " + FormatShortPercent(remainingPercent) +
+            ", used " + messageCount + " msg / " + FormatTokens(weightedTokens);
     }
 
     private static NativeMenuItem BuildNativeMenuItem(string header, Action action)
@@ -547,6 +639,7 @@ public partial class MainWindow : Window
         {
             _trayIcon.ToolTipText = _lastTrayTooltipText;
             _trayIcon.IsVisible = _config.minimizeToTray;
+            UpdateTrayMenuItems();
 
             if (!RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
@@ -626,6 +719,7 @@ public partial class MainWindow : Window
 
     private void Render(QuotaSnapshot snapshot)
     {
+        _lastSnapshot = snapshot;
         RenderCodex(snapshot.Codex);
         RenderClaude(snapshot.Claude);
         RenderCharts(snapshot);
