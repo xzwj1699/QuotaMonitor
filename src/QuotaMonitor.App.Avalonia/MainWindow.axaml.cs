@@ -135,6 +135,7 @@ public partial class MainWindow : Window
             _timer.Stop();
             _trayIcon?.Dispose();
         };
+        SizeChanged += (_, _) => QueueNormalModeResize();
     }
 
     private Control BuildContent()
@@ -1004,6 +1005,15 @@ public partial class MainWindow : Window
                 : ScrollBarVisibility.Auto;
         }
 
+        if (_columns != null)
+        {
+            _columns.VerticalAlignment = compact ? VerticalAlignment.Top : VerticalAlignment.Stretch;
+            if (compact)
+            {
+                _columns.MinHeight = 0;
+            }
+        }
+
         _titleText.FontSize = compact ? 16 : 20;
         _statusText.FontSize = compact ? 12 : 13;
         _configPathText.IsVisible = !compact;
@@ -1019,7 +1029,7 @@ public partial class MainWindow : Window
 
         SizeToContent = SizeToContent.Manual;
         MinWidth = compact ? (bothVisible ? 480 : 340) : 620;
-        MinHeight = compact ? 180 : 430;
+        MinHeight = compact ? 180 : 620;
         if (compact)
         {
             Width = Math.Min(Math.Max(Width, MinWidth), bothVisible ? 600 : 420);
@@ -1028,9 +1038,10 @@ public partial class MainWindow : Window
             return;
         }
 
-        Width = Math.Max(Width, bothVisible ? 780 : 560);
-        Height = Math.Max(Height, 520);
+        Width = Math.Max(Width, bothVisible ? 900 : 620);
+        Height = Math.Max(Height, 660);
         ApplyServiceVisibility();
+        QueueNormalModeResize();
     }
 
     private void QueueCompactResize()
@@ -1078,6 +1089,37 @@ public partial class MainWindow : Window
                 PositionAtTopRightIfNeeded();
             }
         }
+    }
+
+    private void QueueNormalModeResize()
+    {
+        if (_config.compactMode)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(UpdateNormalModeContentHeight);
+    }
+
+    private void UpdateNormalModeContentHeight()
+    {
+        if (_config.compactMode || _columns == null || _contentScrollViewer == null)
+        {
+            if (_columns != null)
+            {
+                _columns.MinHeight = 0;
+            }
+
+            return;
+        }
+
+        var contentHeight = _contentScrollViewer.Bounds.Height;
+        if (double.IsNaN(contentHeight) || double.IsInfinity(contentHeight) || contentHeight <= 0)
+        {
+            return;
+        }
+
+        _columns.MinHeight = contentHeight;
     }
 
     private bool SaveConfig()
@@ -1532,7 +1574,7 @@ public partial class MainWindow : Window
         private readonly WindowRow _longWindow = new();
         private readonly PaceChartControl _paceChart = new();
         private readonly HistoryChartControl _historyChart = new();
-        private readonly StackPanel _stack = new();
+        private readonly Grid _layout = new();
         private bool _showHistory;
         private bool _compactMode;
 
@@ -1550,17 +1592,24 @@ public partial class MainWindow : Window
 
             _primary.Set("5h", "Loading...", null);
             _longWindow.Set(longWindowLabel, "Loading...", null);
-            _paceChart.Height = 160;
-            _historyChart.Height = 160;
+            _paceChart.MinHeight = 240;
+            _historyChart.MinHeight = 240;
+            _paceChart.VerticalAlignment = VerticalAlignment.Stretch;
+            _historyChart.VerticalAlignment = VerticalAlignment.Stretch;
             _historyChart.IsVisible = false;
 
-            _stack.Spacing = 10;
-            _stack.Children.Add(_title);
-            _stack.Children.Add(_plan);
-            _stack.Children.Add(_primary.Root);
-            _stack.Children.Add(_longWindow.Root);
-            _stack.Children.Add(_paceChart);
-            _stack.Children.Add(_historyChart);
+            _layout.RowDefinitions = new RowDefinitions("Auto,Auto,Auto,Auto,*");
+            _layout.Children.Add(_title);
+            Grid.SetRow(_plan, 1);
+            _layout.Children.Add(_plan);
+            Grid.SetRow(_primary.Root, 2);
+            _layout.Children.Add(_primary.Root);
+            Grid.SetRow(_longWindow.Root, 3);
+            _layout.Children.Add(_longWindow.Root);
+            Grid.SetRow(_paceChart, 4);
+            _layout.Children.Add(_paceChart);
+            Grid.SetRow(_historyChart, 4);
+            _layout.Children.Add(_historyChart);
 
             Root = new Border
             {
@@ -1568,7 +1617,7 @@ public partial class MainWindow : Window
                 CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(12),
                 VerticalAlignment = VerticalAlignment.Top,
-                Child = _stack
+                Child = _layout
             };
             ApplyTheme(UiPalette.FromThemeName("light"));
         }
@@ -1609,11 +1658,20 @@ public partial class MainWindow : Window
         public void SetCompactMode(bool compactMode)
         {
             _compactMode = compactMode;
+            _layout.RowDefinitions = compactMode
+                ? new RowDefinitions("Auto,Auto,Auto,Auto,Auto")
+                : new RowDefinitions("Auto,Auto,Auto,Auto,*");
             _title.FontSize = compactMode ? 15 : 17;
             _plan.IsVisible = !compactMode;
-            _stack.Spacing = compactMode ? 6 : 10;
             _plan.Margin = compactMode ? new Thickness(0, 2, 0, 6) : new Thickness(0, 2, 0, 10);
+            _primary.Root.Margin = new Thickness(0);
+            _longWindow.Root.Margin = new Thickness(0, compactMode ? 6 : 10, 0, 0);
+            _paceChart.Margin = new Thickness(0, compactMode ? 0 : 10, 0, 0);
+            _historyChart.Margin = new Thickness(0, compactMode ? 0 : 10, 0, 0);
+            _paceChart.MinHeight = compactMode ? 0 : 240;
+            _historyChart.MinHeight = compactMode ? 0 : 240;
             Root.Padding = compactMode ? new Thickness(8) : new Thickness(12);
+            Root.VerticalAlignment = compactMode ? VerticalAlignment.Top : VerticalAlignment.Stretch;
             _primary.SetCompactMode(compactMode);
             _longWindow.SetCompactMode(compactMode);
             ApplyChartVisibility();
