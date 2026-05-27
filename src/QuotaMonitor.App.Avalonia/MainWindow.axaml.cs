@@ -612,6 +612,7 @@ public partial class MainWindow : Window
         {
             _refreshButton.IsEnabled = true;
             _refreshInProgress = false;
+            QueueCompactResize();
         }
     }
 
@@ -843,6 +844,7 @@ public partial class MainWindow : Window
         RefreshContextMenu();
         RefreshTrayMenu();
         _statusText.Text = enabled ? "Compact mode enabled." : "Compact mode disabled.";
+        QueueCompactResize();
     }
 
     private void SetAlwaysOnTopEnabled(bool enabled)
@@ -982,19 +984,67 @@ public partial class MainWindow : Window
         _codexPanel.SetCompactMode(compact);
         _claudePanel.SetCompactMode(compact);
 
-        SizeToContent = compact ? SizeToContent.Height : SizeToContent.Manual;
+        SizeToContent = SizeToContent.Manual;
         MinWidth = compact ? (bothVisible ? 480 : 340) : 620;
-        MinHeight = compact ? 0 : 430;
+        MinHeight = compact ? 180 : 430;
         if (compact)
         {
             Width = Math.Min(Math.Max(Width, MinWidth), bothVisible ? 600 : 420);
             ApplyServiceVisibility();
+            QueueCompactResize();
             return;
         }
 
         Width = Math.Max(Width, bothVisible ? 780 : 560);
         Height = Math.Max(Height, 520);
         ApplyServiceVisibility();
+    }
+
+    private void QueueCompactResize()
+    {
+        if (!_config.compactMode)
+        {
+            return;
+        }
+
+        Dispatcher.UIThread.Post(ResizeCompactWindowToContent);
+    }
+
+    private void ResizeCompactWindowToContent()
+    {
+        if (!_config.compactMode || _rootGrid == null)
+        {
+            return;
+        }
+
+        var width = Width;
+        if (double.IsNaN(width) || double.IsInfinity(width) || width <= 0)
+        {
+            width = Bounds.Width;
+        }
+
+        if (double.IsNaN(width) || double.IsInfinity(width) || width <= 0)
+        {
+            width = _config.CodexVisible && _config.ClaudeVisible ? 560 : 380;
+        }
+
+        width = Math.Max(MinWidth, width);
+        _rootGrid.Measure(new Size(width, double.PositiveInfinity));
+        var desiredHeight = Math.Ceiling(_rootGrid.DesiredSize.Height);
+        if (double.IsNaN(desiredHeight) || double.IsInfinity(desiredHeight) || desiredHeight <= 0)
+        {
+            return;
+        }
+
+        var targetHeight = Math.Max(MinHeight, desiredHeight);
+        if (double.IsNaN(Height) || Math.Abs(Height - targetHeight) > 1)
+        {
+            Height = targetHeight;
+            if (IsVisible)
+            {
+                PositionAtTopRightIfNeeded();
+            }
+        }
     }
 
     private bool SaveConfig()
