@@ -196,6 +196,7 @@ public partial class MainWindow : Window
         _header = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            Background = Brushes.Transparent,
             Margin = new Thickness(0, 0, 0, 12)
         };
         _header.Children.Add(_titleText);
@@ -219,6 +220,7 @@ public partial class MainWindow : Window
         _chartToolbar = new StackPanel
         {
             Orientation = Orientation.Horizontal,
+            Background = Brushes.Transparent,
             Spacing = 8,
             Margin = new Thickness(0, 0, 0, 12),
             Children =
@@ -232,6 +234,7 @@ public partial class MainWindow : Window
         _columns = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,*"),
+            Background = Brushes.Transparent,
             ColumnSpacing = 12,
             VerticalAlignment = VerticalAlignment.Top
         };
@@ -242,6 +245,7 @@ public partial class MainWindow : Window
         _bottom = new Grid
         {
             ColumnDefinitions = new ColumnDefinitions("*,Auto"),
+            Background = Brushes.Transparent,
             Margin = new Thickness(0, 12, 0, 0)
         };
         _bottom.Children.Add(_statusText);
@@ -251,15 +255,17 @@ public partial class MainWindow : Window
         _rootGrid = new Grid
         {
             RowDefinitions = new RowDefinitions("Auto,Auto,*,Auto"),
+            Background = Brushes.Transparent,
             Margin = new Thickness(18)
         };
-        _rootGrid.ContextMenu = BuildContextMenu();
+        RefreshContextMenu();
         _rootGrid.Children.Add(_header);
         Grid.SetRow(_chartToolbar, 1);
         _rootGrid.Children.Add(_chartToolbar);
         _contentScrollViewer = new ScrollViewer
         {
             Content = _columns,
+            Background = Brushes.Transparent,
             VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
             HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
         };
@@ -267,6 +273,7 @@ public partial class MainWindow : Window
         _rootGrid.Children.Add(_contentScrollViewer);
         Grid.SetRow(_bottom, 3);
         _rootGrid.Children.Add(_bottom);
+        RefreshContextMenu();
 
         ApplyServiceVisibility();
         ApplyWindowPreferences();
@@ -798,9 +805,35 @@ public partial class MainWindow : Window
 
     private void RefreshContextMenu()
     {
+        ContextMenu = BuildContextMenu();
         if (_rootGrid != null)
         {
             _rootGrid.ContextMenu = BuildContextMenu();
+        }
+
+        if (_header != null)
+        {
+            _header.ContextMenu = BuildContextMenu();
+        }
+
+        if (_chartToolbar != null)
+        {
+            _chartToolbar.ContextMenu = BuildContextMenu();
+        }
+
+        if (_contentScrollViewer != null)
+        {
+            _contentScrollViewer.ContextMenu = BuildContextMenu();
+        }
+
+        if (_columns != null)
+        {
+            _columns.ContextMenu = BuildContextMenu();
+        }
+
+        if (_bottom != null)
+        {
+            _bottom.ContextMenu = BuildContextMenu();
         }
     }
 
